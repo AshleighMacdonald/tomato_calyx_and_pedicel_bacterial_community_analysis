@@ -1,0 +1,1543 @@
+---
+title: "Phyloseq, taxonomic profiles and alpha diversity analysis"
+output: html_document
+editor_options: 
+chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+#include = FALSE means code will be run but code AND output will not be displayed in final html doc
+
+#The below code means we are setting ECHO=TRUE to all future chunks (unless otherwise stated)
+#ECHO=true means we want to display code alongside results
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include=FALSE}
+#INSTALL PACKAGES
+install.packages("tidyverse")
+install.packages("dplyr")
+install.packages("ggplot2")
+install.packages("RColorBrewer")
+install.packages("ggsignif")
+install.packages("permute")
+install.packages("lattice")
+install.packages("phangorn")
+install.packages("stringr")
+install.packages("vegan")
+install.packages("cowplot")
+install.packages('randomcoloR')
+install.packages("FSA")
+install.packages("stringr")
+install.packages("randomcoloR")
+
+#Below are the packages that needed to be installed via Biocmanager
+#if (!requireNamespace("BiocManager", quietly = TRUE))
+#    install.packages("BiocManager")
+BiocManager::install("phyloseq")
+BiocManager::install("DECIPHER")
+BiocManager::install("Biostrings")
+BiocManager::install("microbiome")
+
+#Below are the packages that needed to be installed via other means
+#microbiomeSeq
+install.packages("adespatial")
+BiocManager::install(c("AnnotationDbi", "DESeq2", "GO.db", "impute", "phyloseq", "preprocessCore"))
+install_github("umerijaz/microbiomeSeq")
+
+#Load libraries
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(permute)
+library(lattice)
+library(ggsignif)
+library(stringr)
+library(RColorBrewer)
+library(DECIPHER)
+library(phangorn)
+library(stringr)
+library(microbiomeSeq)
+library(vegan)
+library(Biostrings)
+library(cowplot)
+library(microbiome)
+library(randomcoloR)
+library(FSA)
+library(phyloseq)
+library(randomcoloR)
+```
+
+#Section 1: Data inspection and filtering
+
+##Exploration of plant and negative control contamination in samples
+In the DADA2 script, taxonomy was assigned to the ASVs.
+The total number of reads in each sample which originated from plants was calculated and visualised before being removed from the dataset.
+After this, the total number of reads which were also present in the negative controls were then calculated and visualised for each sample.
+ASVs present in the negative controls were kept in samples.
+
+```{r, warning=FALSE, echo=FALSE}
+####################
+#LOAD THE ASV TABLE WHICH WAS PRODUCED FROM DADA2 SCRIPT AND REFORMAT
+###############
+
+ASV_all <- read.table(file="C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/DADA2/Results/Tables/ASV_sample_information.csv", header  = TRUE, sep= ",") %>%
+  dplyr::rename(sequence=X) #rename column X as sequence
+ASV_all$ASV <- paste0("ASV_", 1:nrow(ASV_all)) #making a column called ASV, in the column paste "ASV_" and then a number from 1 to the number of rows present in the dataset. This col is added to the end of the table. When this new col is added, row numbers are also added to the dataframe (because row number was required for this function)
+ASV_all <- ASV_all %>% 
+  dplyr::select(sequence,ASV,everything()) #puts the cols in order of sequence, ASV then followed by everything else
+
+#########################
+#REMOVE PLANT ASSIGNED ASVS
+#########################
+#Now need to remove ASVs that are from Eukaryota, mithochondria or chloroplasts i.e. we need to remove ASVs that came from plants 
+#Also removing samples with NA data in phylum or kingdom sections, however this did not apply to any samples in my dataset
+#Make a dataset for the 'dumped' plant ASV data - this dataset is handy to have
+ASV_dumped_plants <- ASV_all %>% 
+  filter(Family == "Mitochondria"| Kingdom== "Eukaryota" | Order=="Chloroplast" | is.na(Kingdom)| is.na(Phylum))
+
+#Now create the dataset which contains only the 'non-dumped' ASVs.
+ASV_plant_filtered <- anti_join(ASV_all,ASV_dumped_plants, by="ASV") #taking the ASV_all dataset and removing ASV_dumped_plants dataset based on the ASV column
+
+################
+#REMOVE ASVS DETECTED IN THE NEGATIVE CONTROL (ONLY TO PRODUCE A SUMMARY PLOT TO SHOW PRESENCE OF NEGATIVE CONTROL ASVS)
+################
+#Make a dataset to display which ASVs were detected in the negative controls
+NC_ASVs <- ASV_plant_filtered %>% 
+  dplyr::select(ASV,NC.1, NC.2) %>% #only selecting these specific cols
+  filter(NC.1>0|NC.2>0) #filter for only rows which have >0 in NC.1 or >0 in NC.2
+NC_ASVs <- NC_ASVs$ASV #just selecting the ASV col in this, because only this info was required for the removal in the next step
+
+#Use this info to create a dataset for the 'dumped' neg control ASV data
+ASV_dumped_NC <- ASV_plant_filtered %>% 
+  filter(ASV%in% NC_ASVs)
+
+#Now create the dataset which contains only the 'non-dumped' ASVs
+ASV_plant_NC_filtered <- ASV_plant_filtered %>% 
+  filter(!ASV%in% NC_ASVs) %>% #filter out the ASVs present in NC_ASVs
+  dplyr::select(-NC.1,-NC.2) #then remove neg control cols 1 and 2
+
+#################
+#GENERATE SUMMARY TABLES TO SHOW TOTAL NUMBER OF READS LOST BY REMOVING PLANT ASVS AND ASVS DETECTED IN THE NEGATIVE CONTROL
+#################
+
+colnames(ASV_all) #shows that samples are in cols 3:52 (exclude neg controls)
+colnames(ASV_plant_filtered) #shows that samples are in cols 3:52 (exclude neg controls)
+colnames(ASV_plant_NC_filtered) #shows that samples are in cols 3:52 (exclude neg controls)
+summary_table <- data.frame(sample=colnames(ASV_all[3:52]),
+                            input=colSums(ASV_all[3:52]),
+                            after_plant_filtered=colSums(ASV_plant_filtered[3:52]), 
+                            after_NC_filtered=colSums(ASV_plant_NC_filtered[3:52])) #making a dataframe with columns called sample, input, after_plant_filtered and after_NC_filtered. Contents of the sample column is the column names of 3:52 in ASV_all. Contents of the input column is the sum of rows in cols 3:52 in ASV_all and similar principle for after_plant_filtered and after_NC_filtered column.
+
+percentage_through_plant_filter=(summary_table$after_plant_filtered/summary_table$input)*100 #percent of reads which passed through plant filter in each sample
+mean(percentage_through_plant_filter) #only an average of 12.5% of original input reads passed through this stage in each sample (neg controls not included in this)
+range(percentage_through_plant_filter)
+
+percentage_through_NC_filter=(summary_table$after_NC_filtered/summary_table$input)*100
+mean(percentage_through_NC_filter) #only ~4.3% of original input reads passed through this stage in each sample
+
+summary_table$percentage_input_through_plant_filter=percentage_through_plant_filter #make col to show percentage passed through plant filter
+summary_table$percentage_input_through_NC_filter=percentage_through_NC_filter #make col to show percentage passed through NC filter
+
+#################
+#GENERATE SUMMARY PLOT TO SHOW TOTAL NUMBER OF READS LOST BY REMOVING PLANT ASVS
+#################
+#colnames(ASV_plant_filtered)
+#colnames(ASV_dumped_plants)
+ASV_plant_filtered_sums <- colSums(ASV_plant_filtered[3:54])
+ASV_dumped_plants_sums <- colSums(ASV_dumped_plants[3:54])
+
+plant_sums <- as.data.frame(cbind(ASV_plant_filtered_sums,ASV_dumped_plants_sums)) %>% #as.data.frame checks if th data is dataframe and if not, it will force it to be if possible
+  add_rownames(.) %>% #adds in rownames as a column
+  dplyr::rename(Sample=rowname,Bacteria=ASV_plant_filtered_sums,Plants=ASV_dumped_plants_sums) %>% #now renaming the col names
+  gather(key = "Type", value = "N_of_reads",
+        Bacteria,Plants) #gathering columns into key-value pairs. We're already in a loop of the data, we are using the columns called Bacteria and Plants, these column names will be assigned into the key type and their values will be assigned into the value N_of_reads
+
+#Extract metadata info from the sample name
+plant_sums_updated <- plant_sums %>%
+    filter(Sample != 'NC.1' & Sample != 'NC.2') %>%
+    mutate(bio_rep = as.integer(sub("B(\\d+)\\..*", "\\1", Sample)),
+         treatment = ifelse(grepl("UT", Sample), 'Untreated', 'Treated'),
+         storage_days = as.numeric(sub(".*T(\\d+)", "\\1", Sample))) %>%
+  mutate(treatment = factor(treatment, levels =c('Untreated','Treated'))) %>%
+  mutate(bio_rep = factor(bio_rep, levels =c(1:10))) %>%
+  mutate(storage_days = factor(storage_days, levels =c('0','3','10')))  %>%
+  mutate(Sample = factor(Sample, levels = c('B1.UT0','B1.UT3','B1.T3','B1.UT10','B1.T10','B2.UT0','B2.UT3','B2.T3','B2.UT10','B2.T10', 'B3.UT0','B3.UT3','B3.T3','B3.UT10','B3.T10', 'B4.UT0','B4.UT3','B4.T3','B4.UT10','B4.T10', 'B5.UT0','B5.UT3','B5.T3','B5.UT10','B5.T10', 'B6.UT0','B6.UT3','B6.T3','B6.UT10','B6.T10', 'B7.UT0','B7.UT3','B7.T3','B7.UT10','B7.T10', 'B8.UT0','B8.UT3','B8.T3','B8.UT10','B8.T10', 'B9.UT0','B9.UT3','B9.T3','B9.UT10','B9.T10', 'B10.UT0','B10.UT3','B10.T3','B10.UT10','B10.T10')))
+
+ggplot(plant_sums_updated)+
+  geom_bar(aes(Sample,N_of_reads,fill=Type), stat = "identity", group = "treatment")+
+  coord_flip()+theme_classic(base_size = 12)+
+  ylab("Sequencing depth")+
+  xlab("Sample ID") +
+  scale_fill_manual(values = c('grey36','palegreen3'), name = "ASV source") +
+  #theme(text = element_text(size = 40)) + #change to 40 for saving
+  ggtitle("Plant and bacterial reads in each sample")+
+  theme(axis.text=element_text(size=30),axis.title=element_text(size=35), legend.title = element_text(size=35), legend.text = element_text(size=35), title=element_text(size=37))
+
+cowplot::ggsave2("Plant_and_bacterial_reads_detected_in_each_sample.png", width=20, height = 20, path = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Phyloseq/Results/Plots/Contamination_Charts")
+
+#################
+#GENERATE SUMMARY PLOT TO SHOW TOTAL NUMBER OF READS ALSO PRESENT IN NEGATIVE CONTROLS
+#################
+
+#colnames(ASV_plant_NC_filtered)
+#colnames(ASV_dumped_NC)
+ASV_plant_NC_filtered_sums <- colSums(ASV_plant_NC_filtered[3:52])
+ASV_dumped_NC_sums <- colSums(ASV_dumped_NC[3:52])
+
+NC_sums <- as.data.frame(cbind(ASV_plant_NC_filtered_sums,ASV_dumped_NC_sums)) %>%
+  add_rownames(.) %>%
+  dplyr::rename(Sample=rowname,Absent_from_Neg_Control=ASV_plant_NC_filtered_sums,Present_in_Neg_Control=ASV_dumped_NC_sums) %>%
+  gather(key = "Type", value = "N_of_reads",
+        Absent_from_Neg_Control,Present_in_Neg_Control)
+
+#Extract metadata info from the sample name
+NC_sums_updated <- NC_sums %>%
+    mutate(bio_rep = as.integer(sub("B(\\d+)\\..*", "\\1", Sample)),
+         treatment = ifelse(grepl("UT", Sample), 'Untreated', 'Treated'),
+         storage_days = as.numeric(sub(".*T(\\d+)", "\\1", Sample))) %>%
+  mutate(treatment = factor(treatment, levels =c('Untreated','Treated'))) %>%
+  mutate(bio_rep = factor(bio_rep, levels =c(1:10))) %>%
+  mutate(storage_days = factor(storage_days, levels =c('0','3','10')))  %>%
+  mutate(Sample = factor(Sample, levels = c('B1.UT0','B1.UT3','B1.T3','B1.UT10','B1.T10','B2.UT0','B2.UT3','B2.T3','B2.UT10','B2.T10', 'B3.UT0','B3.UT3','B3.T3','B3.UT10','B3.T10', 'B4.UT0','B4.UT3','B4.T3','B4.UT10','B4.T10', 'B5.UT0','B5.UT3','B5.T3','B5.UT10','B5.T10', 'B6.UT0','B6.UT3','B6.T3','B6.UT10','B6.T10', 'B7.UT0','B7.UT3','B7.T3','B7.UT10','B7.T10', 'B8.UT0','B8.UT3','B8.T3','B8.UT10','B8.T10', 'B9.UT0','B9.UT3','B9.T3','B9.UT10','B9.T10', 'B10.UT0','B10.UT3','B10.T3','B10.UT10','B10.T10')))
+
+ggplot(NC_sums_updated)+
+geom_bar(aes(Sample,N_of_reads,fill=Type), stat = "identity")+
+  coord_flip()+theme_classic(base_size = 12)+
+  ylab("Sequencing depth")+
+  xlab("Sample ID") +
+  scale_fill_manual(name="",labels=c("ASVs absent from negative control", "ASVs present in negatvie control"), values = c('dodgerblue2','firebrick')) +
+  #theme(text = element_text(size = 40)) + #change to 40 for saving
+  ggtitle("Negative control reads in each sample after plant ASV removal") +
+  theme(axis.text=element_text(size=30),axis.title=element_text(size=35), legend.title = element_text(size=35), legend.text = element_text(size=32), title=element_text(size=37))
+
+cowplot::ggsave2("Reads_from_neg_control_in_each_sample.png", width=20, height = 20, path = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Phyloseq/Results/Plots/Contamination_Charts")
+
+```
+
+After plant ASVs were removed, only 12.5% of the original number of reads remained on average per sample.
+After neg control ASVs were removed, only 4.33% of the original number of reads remained on average per sample.
+
+##Further exploration of negative control contamination in samples
+The ASVs from the negative control which were also detected in the samples were investigated. Charts to present the amount of each individual neg control ASV present in each sample were produced.
+
+```{r}
+##################
+#CHART TO SHOW PRESENCE OF EACH INDIVIDUAL ASV FROM NEG CONTROLS IN EACH SAMPLE
+##################
+
+#Make a dataframe which only contains data for the neg control ASVs which were also detected in samples
+ASV_dumped_NC_investigation <- ASV_dumped_NC
+rownames(ASV_dumped_NC_investigation) <- ASV_dumped_NC_investigation$ASV #make the rownames equal the asv name
+colnames(ASV_dumped_NC_investigation)
+ASV_dumped_NC_investigation_proc <- ASV_dumped_NC_investigation[,3:52] #only select for samples - exclude the neg controls themselves
+ASV_dumped_NC_investigation_proc <- ASV_dumped_NC_investigation_proc[(rowSums(ASV_dumped_NC_investigation_proc)>0),] #only include the ASVs which have their rowsum total as greater than 0 i.e. they are present in at least one sample
+#5 ASVs were detected in neg controls and samples
+
+#Now make the dataset to include the taxonomy info (this previously needed to be removed for rowsums to be used to detect ASVs >0 in samples)
+tax_NC_investigation <- subset(ASV_dumped_NC_investigation, rownames(ASV_dumped_NC_investigation) %in% rownames(ASV_dumped_NC_investigation_proc))
+
+#To make the dataframe for the chart, attach the total bacterial ASV number (already calculated in ASV_plant_filtered_sums) to the tax_NC_investigation dataframe
+#tax_NC_investigation first needs to be modified to include only the necessary columns
+colnames(tax_NC_investigation)
+tax_NC_investigation_proc <- tax_NC_investigation[,3:52] #exclude neg controls
+
+NC_investigation_sums <- as.data.frame(t(ASV_plant_filtered_sums)) #t switches the cols and rows around
+rownames(NC_investigation_sums) <- 'Total_Bacterial_ASVs'
+colnames(NC_investigation_sums)
+NC_investigation_sums <- NC_investigation_sums[,1:50] #exclude neg controls
+
+NC_sample_ASVs <- rbind(NC_investigation_sums,tax_NC_investigation_proc) %>%
+  t() %>%
+  as.data.frame() %>%
+  add_rownames(.) %>%
+  dplyr::rename(Sample=rowname)
+
+#Make an ASV_Other col to cover the reads from the ASVs present in each sample which were not a part of these ASVs
+NC_sample_ASVs$ASV_Other <- NC_sample_ASVs$Total_Bacterial_ASVs - NC_sample_ASVs$ASV_2 - NC_sample_ASVs$ASV_9 - NC_sample_ASVs$ASV_29 - NC_sample_ASVs$ASV_80 - NC_sample_ASVs$ASV_277
+
+#Make the key-value pairs
+NC_sample_ASVs <- gather(NC_sample_ASVs, key = "ASV", value = "N_of_reads", ASV_2, ASV_9, ASV_29, ASV_80, ASV_277, ASV_Other)
+
+#Extract metadata info from the sample name
+NC_sample_ASVs_updated <- NC_sample_ASVs %>%
+    mutate(bio_rep = as.integer(sub("B(\\d+)\\..*", "\\1", Sample)),
+         treatment = ifelse(grepl("UT", Sample), 'Untreated', 'Treated'),
+         storage_days = as.numeric(sub(".*T(\\d+)", "\\1", Sample))) %>%
+  mutate(treatment = factor(treatment, levels =c('Untreated','Treated'))) %>%
+  mutate(bio_rep = factor(bio_rep, levels =c(1:10))) %>%
+  mutate(storage_days = factor(storage_days, levels =c('0','3','10')))  %>%
+  mutate(Sample = factor(Sample, levels = c('B1.UT0','B1.UT3','B1.T3','B1.UT10','B1.T10','B2.UT0','B2.UT3','B2.T3','B2.UT10','B2.T10', 'B3.UT0','B3.UT3','B3.T3','B3.UT10','B3.T10', 'B4.UT0','B4.UT3','B4.T3','B4.UT10','B4.T10', 'B5.UT0','B5.UT3','B5.T3','B5.UT10','B5.T10', 'B6.UT0','B6.UT3','B6.T3','B6.UT10','B6.T10', 'B7.UT0','B7.UT3','B7.T3','B7.UT10','B7.T10', 'B8.UT0','B8.UT3','B8.T3','B8.UT10','B8.T10', 'B9.UT0','B9.UT3','B9.T3','B9.UT10','B9.T10', 'B10.UT0','B10.UT3','B10.T3','B10.UT10','B10.T10'))) %>%
+    mutate(ASV = factor(ASV, levels =c('ASV_2','ASV_9','ASV_29','ASV_80','ASV_277','ASV_Other')))
+
+ggplot(NC_sample_ASVs_updated)+
+geom_bar(aes(Sample,N_of_reads,fill=ASV), stat = "identity")+
+  coord_flip()+theme_classic(base_size = 12)+
+  ylab("Sequencing depth")+
+  xlab("Sample ID") +
+  scale_fill_brewer(palette = "Set2", name = "ASV detected in negative control", labels=c("ASV 2", "ASV 9", "ASV 29", "ASV 80", "ASV 277", "Absent from negative control")) +
+  #theme(text = element_text(size = 40)) + #change to 40 for saving
+  ggtitle("Reads from negative control ASVs (after plant DNA removal)") +
+    theme(axis.text=element_text(size=30),axis.title=element_text(size=35), legend.title = element_text(size=35), legend.text = element_text(size=32), title=element_text(size=37))
+
+cowplot::ggsave2("Neg_control_ASVs_in_each_sample.png", width=20, height = 20, path = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Phyloseq/Results/Plots/Contamination_Charts")
+
+```
+
+There were 5 ASVs detected in the negative control which were also detected in samples. These were:
+ASV 2: Pseudomonas genus
+ASV 9: Escherichia shigella genus
+ASV 29: Ralstonia genus
+ASV 80: Curvibacter genus
+ASV 277: Pseudomonas genus
+
+Note that ASV 2 was particularly present in high quantities across samples.
+
+#Section 2: Metadata
+
+##Metdata formatting
+A phyloseq object is required for the data analysis, which requires a metadata file for only those samples included in the object.
+
+The metadata file, which could only be saved in the form of a csv, was loaded and re-saved so that it was available as a tab separated data-frame, which was the required format for adding it into the phyloseq object.
+
+```{r}
+#Load the metadata csv and convert selected variables to factors
+#Has been formatted with the genomic dna extractions before normalisation column called 'quant_reading'
+#A 'treatment_storage_days' column was also added because it was easiest to add this variable to charts, instead of interactions.
+metadata <- read_csv("C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Metadata/Tomato_calyx_pedicel_metadata.csv") %>%
+  mutate(storage_days = factor(storage_days, levels =c(0,3,10))) %>%
+  mutate(treatment = factor(treatment, levels = c('Treated', 'Untreated'))) %>%
+  mutate(treatment_storage_days = factor(treatment_storage_days, levels = c('Untreated.0', 'Untreated.3', 'Treated.3', 'Untreated.10','Treated.10'))) %>%
+  mutate(bio_rep = factor (bio_rep,c(1:10))) %>%
+  mutate(date_tomato_picked = factor(date_tomato_picked, levels = c('19.6.20', '6.7.20', '13.7.20', '20.7.20', '28.7.20', '3.8.20', '10.8.20', '16.9.20', '5.10.20')))
+
+#Save the file as a tab-separated data-frame
+write.table(metadata, file= "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Metadata/Tomato_calyx_pedicel_metadata_tab_sep.csv", sep="\t")
+
+```
+
+##Metadata exploration
+It was beneficial to explore possible relationships between the metadata to determine how the variables related to each other. It could highlight if variables were measuring the same variation (if a correlation was shown), therefore they wouldn't be used in the same model for microbiome data analysis.
+
+In the metadata:
+Sampling design variables: treatment, storage_days and bio_reps
+Biological variables: total_unsealed_tomato_pack_weight, date_tomato_picked
+Sample preparation variables: date_calyx_crushed, date_of_DNA_extraction, weight_measured_for_DNA_extraction, quant_reading (DNA conc before normalisation)
+
+Note that the sample preparation variables were not important for this exploration, however they may be important later on in the ASV analysis.
+
+A standard cut-off is used for correlation. Here, p <0.05 was used, however some people choose p <0.5 for significance.
+
+```{r}
+##########
+#CONTINUOUS VS CONTINUOUS VARIABLES
+##########
+#Generate a pairs plot to look at all of the potential pairwise relationships between all continuous variables you send to it
+#(Pairs plots can only be completed with continuous data)
+str(metadata) #check variable types
+
+#Note this was not required (because these variables were not required to be explored) but has been completed for reference
+#save and open a new pdf
+#pdf("C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Phyloseq/Results/Plots/Metadata_Exploration/Pairs_plot.pdf") 
+metadata %>% dplyr::select(total_unsealed_tomato_pack_weight, weight_measured_for_DNA_extraction, quant_reading) %>% pairs() #selecting the continuous variables and applying them to the pairs function
+#dev.off() #close pdf
+
+#Significance testing
+#Correlation stats can be generated for continuous variables - would use a Pearson or Spearman correlation test.
+#with(metadata, cor.test(Total_Unsealed_Pack_Weight, quant_reading)). The default of cor.test is Pearson but this can changed.
+#Could alternatively do a variance inflation factor which assesses multivariate correlation between lots of different continuous variables all at one time.
+
+############
+#CATEGORICAL VS CONTINUOUS VARIABLES
+############
+#Individual box plots are generated for comparisons.
+
+#Exploration of total unsealed pack weight against categorical variables
+ggplot(metadata, aes(x = treatment, y = total_unsealed_tomato_pack_weight)) +
+  geom_boxplot(outlier.size = 3) + theme(text = element_text(size = 40))
+#cowplot::ggsave2("Treatment_Pack_Weight_Box_Plot.png", width=20, height = 20, path = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Phyloseq/Results/Plots/Metadata_Exploration")
+ggplot(metadata, aes(x = storage_days, y = total_unsealed_tomato_pack_weight)) +
+  geom_boxplot(outlier.size = 3) + theme(text = element_text(size = 40))
+#cowplot::ggsave2("Storage_Days_Pack_Weight_Box_Plot.png", width=20, height = 20, path = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Phyloseq/Results/Plots/Metadata_Exploration")
+ggplot(metadata, aes(x = bio_rep, y = total_unsealed_tomato_pack_weight)) +
+  geom_boxplot(outlier.size = 3) + theme(text = element_text(size = 40))
+#cowplot::ggsave2("Bio_Rep_Pack_Weight_Box_Plot.png", width=20, height = 20, path = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Phyloseq/Results/Plots/Metadata_Exploration")
+ggplot(metadata, aes(x = date_tomato_picked, y = total_unsealed_tomato_pack_weight)) +
+  geom_boxplot(outlier.size = 3) + theme(text = element_text(size = 40))
+#cowplot::ggsave2("Date_Collected_Pack_Weight_Box_Plot.png", width=20, height = 20, path = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Phyloseq/Results/Plots/Metadata_Exploration")
+
+#Kruskal-wallis tests are completed for significance testing
+#See more info about kruskal-wallis and Dunn tests in alpha diversity section
+kruskal.test(total_unsealed_tomato_pack_weight ~ treatment, data = metadata) #p = 0.7141 not sig
+kruskal.test(total_unsealed_tomato_pack_weight ~ storage_days, data = metadata) #p = 0.09065 not sig
+kruskal.test(total_unsealed_tomato_pack_weight ~ bio_rep, data = metadata) #p = 0.2393 not sig
+kruskal.test(total_unsealed_tomato_pack_weight ~ date_tomato_picked, data = metadata) #p = 0.01974 sig
+
+#The significant correlation between pack weight and the date that the tomato was picked has been noted.
+
+##############
+#CATEGORICAL VS CATEGORICAL VARIABLES
+##############
+
+#Frequency tables
+#Exploration of date collected against categorical variables
+with(metadata, table(treatment, date_tomato_picked))
+with(metadata, table(storage_days, date_tomato_picked))
+with(metadata, table(bio_rep, date_tomato_picked))
+
+#Would do chi-squared tests to test for significance
+chisq.test(metadata$treatment, metadata$date_tomato_picked) #p = 0.8978 not sig
+chisq.test(metadata$storage_days, metadata$date_tomato_picked) #p = 0.763 not sig
+chisq.test(metadata$bio_rep, metadata$date_tomato_picked) #p = 0.3032 not sig
+#Warnings were generated because estimates are poor with such small cell sizes
+```
+
+The only correlation found among the metadata variables was between the total unsealed pack weight and the date collected. Both of these variables were therefore measuring the same variation so will not be used in the same model.
+
+#Section 3: Production of the phyloseq object
+
+##Production of the phyloseq object without a tree
+For the phyloseq object, 4 files needed to be uploaded into it; a taxonomy table, an abundance table, a map file and reference sequences.
+Note that although ASVs are used, phyloseq refers to them as OTUs.
+
+```{r}
+#https://joey711.github.io/phyloseq/import-data.html is a good tutorial for importing data into Phyloseq
+
+##################
+#MAKE THE PHYLOSEQ OBJECT 
+##################
+#MAKE THE TAXONOMY TABLE (each ASV row has taxonomy info)
+#Needs to have the ASVs as the rownames
+#Needs to be in the form of a matrix
+
+ASV_taxonomy_table_cont <- ASV_plant_filtered %>% 
+  dplyr::select(ASV,Kingdom,Phylum,Class,Order,Family,Genus,Species) #just selecting these cols
+rownames(ASV_taxonomy_table_cont) <- ASV_taxonomy_table_cont$ASV #assigning the rownames of this table as the ASVs i.e. ASVs no longer needed as a column now, so we remove it in the next step
+ASV_taxonomy_table_cont <- dplyr::select(ASV_taxonomy_table_cont, -ASV) #remove the sequence column
+ASV_taxonomy_table_cont <- as.matrix(ASV_taxonomy_table_cont) #converts the table into a matrix
+
+###########################
+#MAKE THE ABUNDANCE TABLE (each ASV row has sample abundance info)
+#Needs to have the ASVs as the rownames
+#Needs to be in the form of a matrix
+colnames(ASV_plant_filtered)
+ASV_abundance_table_cont <- ASV_plant_filtered[,2:52] #excluding the neg controls
+rownames(ASV_abundance_table_cont) <- ASV_abundance_table_cont$ASV #assigning the rownames of this table as the ASVs i.e. ASVs no longer needed as a column now - so we remove it in the next step
+ASV_abundance_table_cont <- dplyr::select(ASV_abundance_table_cont, -ASV) #remove the sequence column
+ASV_abundance_table_cont <- as.matrix(ASV_abundance_table_cont) #converts the table into a matrix
+
+################
+#MAKE THE MAP FILE (all samples have their metadata)
+#Sample names in this must match those sample names present in the taxonomy and abundance tables
+#Qiime2 format is the best format to have the map file in for adding to the Phyloseq object- this is because this format assigns our sample names as row names (as well as in its own column)
+#Needs to be in the form of a dataframe
+
+#We then import the newly formatted map file into the Qiime2 format
+ASV_map_table <- phyloseq::import_qiime_sample_data("C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Metadata/Tomato_calyx_pedicel_metadata_tab_sep.csv")
+
+#############
+#MAKE THE REFERENCE SEQUENCES
+#This needs to be in the form of a DNAStringSet from the Biostrings package
+#Sequence names must match ASV names present in abundance and taxonomy tables
+seqs_cont <- ASV_plant_filtered$sequence #extract the sequences
+seqs_cont <- DNAStringSet(seqs_cont) #put the sequences into the DNAStringSet format
+names(seqs_cont) <- ASV_plant_filtered$ASV #add the sequence names
+
+#############
+#MAKE THE PHYLOSEQ OBJECT 
+
+psdata_cont <- phyloseq::phyloseq(phyloseq::otu_table(ASV_abundance_table_cont, taxa_are_rows=TRUE), #need to specify if the ASVs are the rows or columns
+                phyloseq::tax_table(ASV_taxonomy_table_cont),
+                phyloseq::sample_data(ASV_map_table),
+                seqs_cont)
+
+#For summary of the phyloseq object
+psdata_cont
+
+#The variable types in the metadata have been re-assigned in the Qiime2 format i.e. the Qiime2 format did not allow for factors so these variable types were assigned back to their original types.
+
+#Create factor variables
+phyloseq::sample_data(psdata_cont)$treatment_storage_days_factor <- factor(phyloseq::sample_data(psdata_cont)$treatment_storage_days, levels = c('Untreated.0', 'Untreated.3', 'Treated.3', 'Untreated.10','Treated.10'))
+phyloseq::sample_data(psdata_cont)$treatment_factor <- factor(phyloseq::sample_data(psdata_cont)$treatment, levels = c('Untreated','Treated'))
+phyloseq::sample_data(psdata_cont)$storage_days_factor <- factor(phyloseq::sample_data(psdata_cont)$storage_days, levels = c('0','3','10'))
+phyloseq::sample_data(psdata_cont)$date_tomato_picked_factor <- factor(phyloseq::sample_data(psdata_cont)$date_tomato_picked, levels = c('19.6.20', '6.7.20', '13.7.20', '20.7.20', '28.7.20', '3.8.20', '10.8.20', '16.9.20', '5.10.20'))
+phyloseq::sample_data(psdata_cont)$date_calyx_crushed_factor <- factor(phyloseq::sample_data(psdata_cont)$date_calyx_crushed, levels = c('13.1.21','14.1.21','15.1.21'))
+phyloseq::sample_data(psdata_cont)$date_of_DNA_extraction_factor <- factor(phyloseq::sample_data(psdata_cont)$date_of_DNA_extraction, levels = c('4.2.21','9.2.21','10.2.21','23.2.21','26.2.21_1','26.2.21_2','1.3.21'))
+phyloseq::sample_data(psdata_cont)$bio_rep_factor <- factor(phyloseq::sample_data(psdata_cont)$bio_rep, levels = c(1:10))
+
+#check the metadata looks okay
+look <- phyloseq::sample_data(psdata_cont)
+#check variable types
+str(phyloseq::sample_data(psdata_cont))
+
+#remove the variables that the factor variables replaced
+colnames(phyloseq::sample_data(psdata_cont))
+phyloseq::sample_data(psdata_cont) <- phyloseq::sample_data(psdata_cont)[,c(1,7,10:18)]
+
+#############
+#EXTRA NOTES
+#############
+#To call each phyloseq object, you would just do:
+#Map table:      phyloseq::sample_data(psdata)
+#Taxonomy table: tax_table(psdata)
+#Abundance table: otu_table(psdata)
+
+```
+
+##Production of a phylogenetic tree and addition into the phyloseq object
+The phangorn package was used to make phylogenetic trees. A tree was made using the psdata_cont object, which was then subsequently added into the psdata_cont object.
+
+```{r, message=FALSE}
+
+##########
+#The following code for generating the phylogenetic tree was sourced from https://f1000research.com/articles/5-1492/v2
+
+#############################################
+#PRODUCTION OF THE TREE (USING THE 'psdata_cont' OBJECT)
+#############################################
+#Fist need to align all of our ASVs
+alignment_cont <- AlignSeqs((seqs_cont), anchor=NA, verbose=FALSE) #added verbose = FALSE to stop output messages
+
+#Put alignment into a phangorn object
+phang.align_cont <- phyDat(as(alignment_cont, "matrix"), type="DNA")
+
+#Then we build a neighbour-joining tree, then fit a maximum likelihood tree using the neighbour-joining tree as a starting point
+#First tree will be built using a distance based method
+dm_cont <- dist.ml(phang.align_cont) #constructs a distance matrix
+treeNJ_cont <- NJ(dm_cont) #use this distance matrix to construct an unrooted (no common ancestor - just showing relationship between the different species), neighbour-joining tree.
+fit_cont = pml(treeNJ_cont, data=phang.align_cont) #computes maximum likelihood for a tree given the data
+
+## negative edges length changed to 0!
+
+#changes the maximum likelihood model to the GTR model, optimises all the parameters and fits the model.
+fitGTR_cont <- update(fit_cont, k=4, inv=0.2)
+#Note that the following line of code takes a while to run (approx 45 mins)
+fitGTR_cont <- optim.pml(fitGTR_cont, model="GTR", optInv=TRUE, optGamma=TRUE,
+                      rearrangement = "stochastic", control = pml.control(trace = 0))
+#The final object contains the data, the tree and many different parameters of the model including the likelihood.
+
+#save(fitGTR_cont, file = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Phyloseq/R_Objects_for_Script/fitGTR_cont.RData")
+#load("C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Phyloseq/R_Objects_for_Script/fitGTR_cont.RData")
+
+###############
+#ADD THE TREE INTO THE PHYLOSEQ OBJECT
+################
+pstree_cont = merge_phyloseq(psdata_cont, phy_tree(fitGTR_cont$tree))
+
+#For summary of this phyloseq object
+pstree_cont
+
+#Removing ASVs which aren't present in any samples (i.e. were only present in the neg controls)
+pstree_cont = prune_taxa(taxa_sums(pstree_cont)>0,pstree_cont)
+
+#save(pstree_cont, file = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Phyloseq/R_Objects_for_Script/pstree_cont.RData")
+#load("C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Phyloseq/R_Objects_for_Script/pstree_cont.RData")
+
+##################
+## Extra Notes
+#There is no point plotting the trees at this stage because there is an overwhelming amount of information
+#A tree can however be plotted using plot_tree(pstree)
+
+```
+
+#Section 4: Library size statistics
+It is easier to use the phyloseq objects to complete final library size statistics.
+It is beneficial to report the quality-controlled library size stats in the thesis or publications.
+
+##Checking the library size of each sample group
+It is beneficial to check that the library size per sample group is roughly equal.
+'Lack of equal coverage might occur if a particular subset of samples amplify poorly and are hard to pool at the same concentration as other samples. They might be older samples, or from a different sampling location, that systematically exhibit lower coverage.'
+Knowing if the sample groups have equal or unequal coverage is beneficial knowledge to consider in the downstream analysis - samples with greater coverage will have more certainty regarding community composition in CLR transformed data.
+
+```{r}
+
+#########################
+#LIBRARY SIZE OF EACH SAMPLE GROUP - AFTER PLANT DNA REMOVAL
+#########################
+#Make a data frame of read depths
+reads_cont<-data.frame(reads=phyloseq::sample_sums(pstree_cont))
+reads_cont$Sample<-rownames(reads_cont) #add the Sample as a col instead of row names
+#Join to the metadata dataframe
+reads_meta_cont<-left_join(reads_cont,metadata,"Sample")
+
+##############
+#Testing for differences between the 5 sample groups
+kruskal.test(reads ~ treatment_storage_days, data = reads_meta_cont) #p=0.01509 so sig
+
+#Dunn test to see which groups in the data are significantly different
+reads_meta_cont_test = FSA::dunnTest(reads ~ treatment_storage_days,
+              data=reads_meta_cont,
+              method="bonferroni")  
+reads_meta_cont_test #Treated 10 vs untreated 0 had a significant difference
+
+#Generate box-plot to show significant result
+c2 <- ggplot(reads_meta_cont,aes(x=treatment_storage_days,y=reads)) + 
+  geom_boxplot(fill='thistle') + 
+  ylab('Library size after plant DNA removal') +
+  xlab('Treatment and storage days') +
+  geom_signif(annotation = c("*"),textsize=15, xmin = 1, xmax = 5,y_position = 1.50e+05) + #T10 + UT0 = 0.017
+  scale_y_continuous(limits = c(-20000, 160000)) + 
+  annotate(x = 0.5, xend= 0.5, y=-15000, yend=0, geom="segment", colour = "black", size = 0.5, alpha = 1) +
+  annotate(x = 1.5, xend= 1.5, y=-15000, yend=0, geom="segment", colour = "black", size = 0.5, alpha = 1) +
+  annotate(x = 3.5, xend= 3.5, y=-15000, yend=0, geom="segment", colour = "black", size = 0.5, alpha = 1) +
+  annotate(x = 5.5, xend= 5.5, y=-15000, yend=0, geom="segment", colour = "black", size = 0.5, alpha = 1) +
+  #now add 'short line' segments to divide condition
+    annotate(x = 2.5, xend= 2.5, y=-7500, yend=0, geom="segment", colour = "black", size = 0.5, alpha = 1) +
+    annotate(x = 4.5, xend= 4.5, y=-7500, yend=0, geom="segment", colour = "black", size = 0.5, alpha = 1) +
+  #set the theme to classic and remove x axis labels and legend
+  theme_classic() +
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank()) +
+  theme(legend.position = 'none') +
+  #add treatment labels
+  annotate(geom = "text", x = 1, y = -4000, label = 'Untreated', size = 8) +
+  annotate(geom = "text", x = 2, y = -4000, label = 'Untreated', size = 8) +
+  annotate(geom = "text", x = 3, y = -4000, label = 'Treated', size = 8) +
+  annotate(geom = "text", x = 4, y = -4000, label = 'Untreated', size = 8) +
+  annotate(geom = "text", x = 5, y = -4000, label = 'Treated', size = 8) +
+  #add day labels
+  annotate(geom = "text", x = 1, y = -12000, label = '0', size = 8) +
+  annotate(geom = "text", x = 2.5, y = -12000, label = '3', size = 8) +
+  annotate(geom = "text", x = 4.5, y = -12000, label = '10', size = 8) +
+    annotate(geom = "text", x = 3, y = -20000, label = 'Treatment and storage time (days)', size = 10) +
+  #remove the 'clip' and adjust position of chart so that axis' align with data
+  coord_cartesian(clip= "off", ylim=c(7500,160000), xlim=c(1,5)) +
+  theme(aspect.ratio = 0.87) + #need this to see added labels
+  theme(axis.text=element_text(size=35),axis.title=element_text(size=38)) 
+
+#########################
+#LIBRARY SIZE OF EACH SAMPLE GROUP - BEFORE PLANT DNA REMOVAL
+#########################
+#Need to quickly make a phyloseq object containing info from samples before plant DNA removal
+
+#MAKE THE TAXONOMY TABLE
+ASV_taxonomy_table_all <- ASV_all %>% 
+  dplyr::select(ASV,Kingdom,Phylum,Class,Order,Family,Genus,Species)
+rownames(ASV_taxonomy_table_all) <- ASV_taxonomy_table_all$ASV
+ASV_taxonomy_table_all <- dplyr::select(ASV_taxonomy_table_all, -ASV)
+ASV_taxonomy_table_all <- as.matrix(ASV_taxonomy_table_all)
+
+#MAKE THE ABUNDANCE TABLE
+colnames(ASV_all)
+ASV_abundance_table_all <- ASV_all[,2:52] #exclude neg controls
+rownames(ASV_abundance_table_all) <- ASV_abundance_table_all$ASV
+ASV_abundance_table_all <- dplyr::select(ASV_abundance_table_all, -ASV)
+ASV_abundance_table_all <- as.matrix(ASV_abundance_table_all)
+
+#metadata file is the same as previous
+
+#MAKE THE REFERENCE SEQUENCES
+seqs_all <- ASV_all$sequence
+seqs_all <- DNAStringSet(seqs_all)
+names(seqs_all) <- ASV_all$ASV
+
+#MAKE THE PHYLOSEQ OBJECT 
+psdata_all <- phyloseq::phyloseq(phyloseq::otu_table(ASV_abundance_table_all, taxa_are_rows=TRUE),
+                phyloseq::tax_table(ASV_taxonomy_table_all),
+                phyloseq::sample_data(ASV_map_table),
+                seqs_all)
+
+#Make a data frame of read depths
+reads_all<-data.frame(reads=phyloseq::sample_sums(psdata_all))
+reads_all$Sample<-rownames(reads_all)
+#Join to the metadata dataframe
+reads_meta_all<-left_join(reads_all,metadata,"Sample")
+
+#Testing for differences between the 5 sample groups
+kruskal.test(reads ~ treatment_storage_days, data = reads_meta_all) #p=0.8875 so not sig
+
+#Generate box-plot
+c1 <- ggplot(reads_meta_all,aes(x=treatment_storage_days,y=reads)) + 
+  geom_boxplot(fill='thistle') + 
+  ylab('Library size before plant DNA removal') +
+  xlab('Treatment and storage days') +
+  scale_y_continuous(limits = c(50000, 500000)) + 
+  annotate(x = 0.5, xend= 0.5, y=62500, yend=100000, geom="segment", colour = "black", size = 0.5, alpha = 1) +
+  annotate(x = 1.5, xend= 1.5, y=62500, yend=100000, geom="segment", colour = "black", size = 0.5, alpha = 1) +
+  annotate(x = 3.5, xend= 3.5, y=62500, yend=100000, geom="segment", colour = "black", size = 0.5, alpha = 1) +
+  annotate(x = 5.5, xend= 5.5, y=62500, yend=100000, geom="segment", colour = "black", size = 0.5, alpha = 1) +
+  #now add 'short line' segments to divide condition
+    annotate(x = 2.5, xend= 2.5, y=81250, yend=100000, geom="segment", colour = "black", size = 0.5, alpha = 1) +
+    annotate(x = 4.5, xend= 4.5, y=81250, yend=100000, geom="segment", colour = "black", size = 0.5, alpha = 1) +
+  #set the theme to classic and remove x axis labels and legend
+  theme_classic() +
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank()) +
+  theme(legend.position = 'none') +
+  #add treatment labels
+    annotate(geom = "text", x = 1, y = 90000, label = 'Untreated', size = 8) +
+  annotate(geom = "text", x = 2, y = 90000, label = 'Untreated', size = 8) +
+  annotate(geom = "text", x = 3, y = 90000, label = 'Treated', size = 8) +
+  annotate(geom = "text", x = 4, y = 90000, label = 'Untreated', size = 8) +
+  annotate(geom = "text", x = 5, y = 90000, label = 'Treated', size = 8) +
+  #add day labels
+  annotate(geom = "text", x = 1, y = 70000, label = '0', size = 8) +
+  annotate(geom = "text", x = 2.5, y = 70000, label = '3', size = 8) +
+  annotate(geom = "text", x = 4.5, y = 70000, label = '10', size = 8) +
+    annotate(geom = "text", x = 3, y = 50000, label = 'Treatment and storage time (days)', size = 10) +
+  #remove the 'clip' and adjust position of chart so that axis' align with data
+  coord_cartesian(clip= "off", ylim=c(119000,500000), xlim=c(1,5)) +
+  theme(aspect.ratio = 0.87) + #need this to see added labels
+  theme(axis.text=element_text(size=35),axis.title=element_text(size=38), title=element_text(size=42)) 
+
+#Put both plots in one figure
+prow <- plot_grid(
+  c1 + theme(axis.text=element_text(size=25),axis.title=element_text(size=28)),
+  c2 + theme(axis.text=element_text(size=25),axis.title=element_text(size=28)),
+  align = 'vh',
+  hjust = -1,
+  vjust = 4,
+  nrow = 1,
+  labels = "AUTO", 
+  label_size = 30
+)
+
+plot_grid(prow)
+cowplot::ggsave2("Combined_library_size_chart.png", width=20, height = 10, path = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Phyloseq/Results/Plots/Library_Stats")
+
+```
+
+Before any ASV removal, library sizes were not significantly different between groups, because concentrations had been normalised.
+After plant ASV removal, library sizes were significantly different between groups.
+
+##Section 5: Taxonomy relative abundance bar charts
+Barcharts provide a quick way of visualising differences in taxonomy between different sample groups.
+
+These barcharts can be generated with or without rarefied data:
+Non-rarefied = there is variation in read depth however the certainty of relative proportions increases as a function of read depth
+Rarefied = there is an even read depth so proportions are calculated using the same read depth, however some samples will be more 'wrong' than others if they have had more data thrown away.
+
+Non-rarefied data was used to generate these bar plots.
+
+```{r}
+###############
+#Phyla relative abundance plots
+###############
+#Produce phyloseq object with compositional abundance by phylum
+pstree_cont_phylum <- pstree_cont %>%
+  microbiome::aggregate_taxa(level = "Phylum") %>%
+  microbiome::transform(transform = "compositional")
+
+#Convert into dataframe and extract relevant info
+pstree_cont_phylum_melt <- phyloseq::psmelt(pstree_cont_phylum)
+colnames(pstree_cont_phylum_melt)
+cont_phylum_avgs <- pstree_cont_phylum_melt[,c(3,8,16)] #shows abundance of each phylum in each of the 50 samples
+
+#Calculate the mean, standard dev and standard error for relative abundances
+cont_phylum_avgs_processed <- summarize(group_by(cont_phylum_avgs, treatment_storage_days_factor, Phylum),
+                                  mean_abd = mean(Abundance, na.rm = TRUE),
+                                  sd_abd = sd(Abundance, na.rm = TRUE),
+                                  se_abd = (sd_abd/sqrt(10))) %>%
+  ungroup()
+unique(cont_phylum_avgs_processed$Phylum) #there were 23 phylum
+
+
+#Make a colour palette for the barchart (23 colours for 23 phyla)
+palette = distinctColorPalette(23)
+#Put the individual names of each phylum into a dataframe
+phylum_names <- as.data.frame(unique(phyloseq::tax_table(pstree_cont)[,"Phylum"] ))
+#Now assign each colour in the palette a phylum name
+names(palette) <- sort(phylum_names$Phylum)
+
+#save palette object so it can be used again without changing colours
+#save(palette, file = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Phyloseq/R_Objects_for_Script/palette.RData")
+#load("C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Phyloseq/R_Objects_for_Script/palette.RData")
+
+#For plotting data from each individual phylum in a multi-facet chart, we want the phyla to appear in order of the highest overall relative abundance across all sample groups
+#Put the 23 phylum as a factor with levels in order of abundance
+pstree_cont_phylum_top23 = names(sort(phyloseq::taxa_sums(pstree_cont_phylum), TRUE)[1:23])
+print(pstree_cont_phylum_top23)
+phylum_top_23_individual <- cont_phylum_avgs_processed %>%
+    mutate(Phylum = factor(Phylum, levels =c("Proteobacteria", "Actinobacteriota", "Firmicutes", "Bacteroidota", "Planctomycetota", "Cyanobacteria", "Chloroflexi", "Gemmatimonadota", "Deinococcota", "Patescibacteria", "Verrucomicrobiota", "Bdellovibrionota", "Acidobacteriota", "Dependentiae", "Myxococcota", "Armatimonadota", "WPS-2", "Dadabacteria", "Abditibacteriota", "Fibrobacterota", "Campylobacterota", "Desulfobacterota", "Nanoarchaeota")))
+
+#Plot of individual phyla in a multi-facet chart
+ggplot(phylum_top_23_individual, aes(treatment_storage_days_factor, mean_abd, fill = Phylum)) +
+  facet_wrap(.~Phylum, scales = 'free') +
+  geom_bar (stat="identity", colour = "black") +
+  geom_errorbar (aes(ymax = mean_abd + se_abd, ymin = mean_abd - se_abd), position=position_dodge(), width = 0.2, colour="black") +
+  ylab('Relative abundance') +
+  xlab('Treatment and storage time (days)') +
+  scale_fill_manual(values = palette) +
+  theme(legend.position="none") +
+  scale_x_discrete(labels=c('UT0','UT3','T3','UT10','T10')) +
+  theme(axis.text.x=element_text(size=10), axis.text.y=element_text(size=13), axis.title=element_text(size=18), strip.text.x = element_text(size = 13))
+
+#cowplot::ggsave2("Top23_Phylum_Relative_Abundance_Individuals.png", path = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Phyloseq/Results/Plots/Phylum_Relative_Abundance/With_Neg_Control_Contamination", width = 330, height = 330, units = "mm")
+
+#Plot of phyla relative abundance in a combined bar chart
+pstree_cont_phylum %>%
+  microbiome::plot_composition(average_by = "treatment_storage_days_factor") +
+  scale_fill_manual(values = palette, name = 'Phylum') +
+  scale_y_continuous(limits = c(-0.15, 1)) + 
+  ylab('Relative abundance') +
+  annotate(x = 0.5, xend= 0.5, y=-0.09, yend=0, geom="segment", colour = "black", size = 0.5, alpha = 1) +
+  annotate(x = 1.5, xend= 1.5, y=-0.09, yend=0, geom="segment", colour = "black", size = 0.5, alpha = 1) +
+  annotate(x = 3.5, xend= 3.5, y=-0.09, yend=0, geom="segment", colour = "black", size = 0.5, alpha = 1) +
+  annotate(x = 5.5, xend= 5.5, y=-0.09, yend=0, geom="segment", colour = "black", size = 0.5, alpha = 1) +
+  #now add 'short line' segments to divide condition
+    annotate(x = 2.5, xend= 2.5, y=-0.04, yend=0, geom="segment", colour = "black", size = 0.5, alpha = 1) +
+    annotate(x = 4.5, xend= 4.5, y=-0.04, yend=0, geom="segment", colour = "black", size = 0.5, alpha = 1) +
+  #set the theme to classic and remove x axis labels and legend
+  theme_classic() +
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank()) +
+  #add treatment labels
+  annotate(geom = "text", x = 1, y = -0.02, label = 'Untreated', size = 8) +
+  annotate(geom = "text", x = 2, y = -0.02, label = 'Untreated', size = 8) +
+  annotate(geom = "text", x = 3, y = -0.02, label = 'Treated', size = 8) +
+  annotate(geom = "text", x = 4, y = -0.02, label = 'Untreated', size = 8) +
+  annotate(geom = "text", x = 5, y = -0.02, label = 'Treated', size = 8) +
+  #add day labels
+  annotate(geom = "text", x = 1, y = -0.07, label = '0', size = 8) +
+  annotate(geom = "text", x = 2.5, y = -0.07, label = '3', size = 8) +
+  annotate(geom = "text", x = 4.5, y = -0.07, label = '10', size = 8) +
+    annotate(geom = "text", x = 3, y = -0.12, label = 'Treatment and storage time (days)', size = 9.5) +
+  #remove the 'clip' and adjust position of chart so that axis' align with data
+  coord_cartesian(clip= "off", ylim=c(0.047,1), xlim=c(1,5)) +
+  theme(aspect.ratio = 1) + #need this to see added labels
+  guides(fill = guide_legend(ncol = 1)) +
+  theme(axis.text=element_text(size=25),axis.title=element_text(size=27), legend.title = element_text(size=27), legend.text = element_text(size=20)) 
+
+#cowplot::ggsave2("All_Samples_Phylum_Relative_Abundance_with_Neg_Control_ASVs.png", path = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Phyloseq/Results/Plots/Phylum_Relative_Abundance/With_Neg_Control_Contamination", width = 330, height = 330, units = 'mm')
+
+############
+#Family relative abundance plots (top 20 only)
+############
+#Produce phyloseq object with compositional abundance by family
+pstree_cont_family <- pstree_cont %>%
+  microbiome::aggregate_taxa(level = "Family") %>%
+  microbiome::transform(transform = "compositional")
+#Pull out the 20 most abundant families and subset the phyloseq object into just those families
+pstree_cont_family_top20 = names(sort(phyloseq::taxa_sums(pstree_cont_family), TRUE)[1:20])
+pstree_cont_family_top20_new<-phyloseq::subset_taxa(pstree_cont_family, Family %in% pstree_cont_family_top20)
+
+#Convert into dataframe and calculate mean, standard dev, standard error for each sample group
+pstree_cont_family_top20_melt <- phyloseq::psmelt(pstree_cont_family_top20_new)
+pstree_cont_family_top20_melt_summary <- summarize(group_by(pstree_cont_family_top20_melt, treatment_storage_days_factor, Family),
+                                  mean_abd = mean(Abundance, na.rm = TRUE),
+                                  sd_abd = sd(Abundance, na.rm = TRUE),
+                                  se_abd = (sd_abd/sqrt(10)))
+
+#Need to add an 'other' family to account for unaccounted relative abundance
+pstree_cont_family_top20_melt_summary_other <- pstree_cont_family_top20_melt_summary %>%
+  group_by(treatment_storage_days_factor) %>%
+  mutate(total_abd = sum(mean_abd)) %>%
+  mutate(other_abd = 1 - total_abd)
+other_data <- pstree_cont_family_top20_melt_summary_other %>%
+  group_by(treatment_storage_days_factor) %>%
+  summarise(
+    Family = "Other",
+    mean_abd = other_abd
+  ) %>%
+     filter(!duplicated(treatment_storage_days_factor))
+#Families are made to be in levels of alphabetical order which is needed for the combined bar chart
+final_family_dataset <- bind_rows(pstree_cont_family_top20_melt_summary, other_data) %>%
+  mutate(Family = factor(Family, levels =c('Azospirillaceae','Bacillaceae','Burkholderiaceae','Chitinophagaceae','Comamonadaceae','Devosiaceae','Enterobacteriaceae','Microbacteriaceae','Nocardiopsaceae','Oxalobacteraceae','Pirellulaceae','Planococcaceae','Pseudomonadaceae','Pseudonocardiaceae','Rhizobiaceae','Rhodobacteraceae','Rickettsiaceae','Sphingomonadaceae','Streptomycetaceae','Unknown','Other'))) %>%
+  mutate(treatment_storage_days_factor = factor(treatment_storage_days_factor, levels = c('Untreated.0','Untreated.3','Treated.3','Untreated.10','Treated.10')))
+
+#Make labels for combined bar chart
+fam1 <- expression(paste(italic("Azospirillaceae")))
+fam2 <- expression(paste(italic("Bacillaceae")))
+fam3 <- expression(paste(italic("Burkholderiaceae")))
+fam4 <- expression(paste(italic("Chitinophagaceae")))
+fam5 <- expression(paste(italic("Comamonadaceae")))
+fam6 <- expression(paste(italic("Devosiaceae")))
+fam7 <- expression(paste(italic("Enterobacteriaceae")))
+fam8 <- expression(paste(italic("Microbacteriaceae")))
+fam9 <- expression(paste(italic("Nocardiopsaceae")))
+fam10 <- expression(paste(italic("Oxalobacteraceae")))
+fam11 <- expression(paste(italic("Pirellulaceae")))
+fam12 <- expression(paste(italic("Planococcaceae")))
+fam13 <- expression(paste(italic("Pseudomonadaceae")))
+fam14 <- expression(paste(italic("Pseudonocardiaceae")))
+fam15 <- expression(paste(italic("Rhizobiaceae")))
+fam16 <- expression(paste(italic("Rhodobacteraceae")))
+fam17 <- expression(paste(italic("Rickettsiacea")))
+fam18 <- expression(paste(italic("Sphingomonadaceae")))
+fam19 <- expression(paste(italic("Streptomycetaceae")))
+fam20 <- expression(paste("Unknown"))
+fam21 <- expression(paste("Other"))
+
+#Make a colour palette of 20 different colours
+palette_20 = randomcoloR::distinctColorPalette(20, runTsne = TRUE)
+#Put the individual names of each family into a dataframe
+family_names <- as.data.frame(unique(phyloseq::tax_table(pstree_cont_family_top20_new)[,"Family"] ))
+#Now assign each colour in the palette a family name
+names(palette_20) <- sort(family_names$Family)
+
+#save palette object so it can be used in other charts without changing colours
+#save(palette_20, file = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Phyloseq/R_Objects_for_Script/palette_20.RData")
+#load("C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Phyloseq/R_Objects_for_Script/palette_20.RData")
+
+#Make an additional grey colour for 'Other'
+added_color <- 'grey50'
+names(added_color) <- 'Other'
+#Add this additional grey colour to the previous palette
+family_palette <- c(palette_20, added_color)
+
+#Plot the combined bar chart
+ggplot(final_family_dataset, aes(treatment_storage_days_factor, mean_abd, fill=Family)) +
+  geom_bar (stat="identity") +
+  scale_y_continuous(limits = c(-0.15, 1.01)) + 
+  ylab('Relative abundance') +
+  scale_fill_manual(values = family_palette, labels = c(fam1,fam2,fam3,fam4,fam5,fam6,fam7,fam8,fam9,fam10,fam11,fam12,fam13,fam14,fam15,fam16,fam17,fam18,fam19,fam20,fam21)) +
+  annotate(x = 0.5, xend= 0.5, y=-0.09, yend=0, geom="segment", colour = "black", size = 0.5, alpha = 1) +
+  annotate(x = 1.5, xend= 1.5, y=-0.09, yend=0, geom="segment", colour = "black", size = 0.5, alpha = 1) +
+  annotate(x = 3.5, xend= 3.5, y=-0.09, yend=0, geom="segment", colour = "black", size = 0.5, alpha = 1) +
+  annotate(x = 5.5, xend= 5.5, y=-0.09, yend=0, geom="segment", colour = "black", size = 0.5, alpha = 1) +
+  #now add 'short line' segments to divide condition
+    annotate(x = 2.5, xend= 2.5, y=-0.04, yend=0, geom="segment", colour = "black", size = 0.5, alpha = 1) +
+    annotate(x = 4.5, xend= 4.5, y=-0.04, yend=0, geom="segment", colour = "black", size = 0.5, alpha = 1) +
+  #set the theme to classic and remove x axis labels and legend
+  theme_classic() +
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank()) +
+  #add treatment labels
+  annotate(geom = "text", x = 1, y = -0.02, label = 'Untreated', size = 8) +
+  annotate(geom = "text", x = 2, y = -0.02, label = 'Untreated', size = 8) +
+  annotate(geom = "text", x = 3, y = -0.02, label = 'Treated', size = 8) +
+  annotate(geom = "text", x = 4, y = -0.02, label = 'Untreated', size = 8) +
+  annotate(geom = "text", x = 5, y = -0.02, label = 'Treated', size = 8) +
+  #add day labels
+  annotate(geom = "text", x = 1, y = -0.07, label = '0', size = 8) +
+  annotate(geom = "text", x = 2.5, y = -0.07, label = '3', size = 8) +
+  annotate(geom = "text", x = 4.5, y = -0.07, label = '10', size = 8) +
+    annotate(geom = "text", x = 3, y = -0.12, label = 'Treatment and storage time (days)', size = 9.5) +
+  #remove the 'clip' and adjust position of chart so that axis' align with data
+  coord_cartesian(clip= "off", ylim=c(0.047,1), xlim=c(1,5)) +
+  theme(aspect.ratio = 1) + #need this to see added labels
+  guides(fill = guide_legend(ncol = 1)) +
+  theme(axis.text=element_text(size=25),axis.title=element_text(size=27), legend.title = element_text(size=27), legend.text = element_text(size=20), legend.text.align = 0)
+
+#cowplot::ggsave2("Top20_Family_Relative_Abundance.png", path = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Phyloseq/Results/Plots/Family_Relative_Abundance/With_Neg_Control_Contamination", width = 330, height = 330, units = "mm")
+
+#Make the multi-facet plot for the top 20 families 
+#For this plot, families will be in order of most abundant (left to right)
+print(pstree_cont_family_top20) #Prints order in most abundant
+family_top_20_individual <- final_family_dataset %>%
+    mutate(Family = factor(Family, levels =c("Pseudomonadaceae", "Rhodobacteraceae", "Enterobacteriaceae", "Nocardiopsaceae", "Rhizobiaceae", "Bacillaceae", "Planococcaceae", "Azospirillaceae", "Burkholderiaceae", "Sphingomonadaceae", "Unknown", "Comamonadaceae", "Microbacteriaceae", "Pirellulaceae", "Chitinophagaceae", "Pseudonocardiaceae", "Rickettsiaceae", "Oxalobacteraceae", "Streptomycetaceae",  "Devosiaceae", "Other"))) %>%
+  filter(Family != 'Other')
+
+#Make labels
+family_ind_names <- list(
+  'Pseudomonadaceae'=expression(paste(italic('Pseudomonadaceae'))),
+  'Rhodobacteraceae'=expression(paste(italic('Rhodobacteraceae'))),
+  'Enterobacteriaceae'=expression(paste(italic("Enterobacteriaceae"))),
+  'Nocardiopsaceae'=expression(paste(italic("Nocardiopsaceae"))),
+  'Rhizobiaceae'=expression(paste(italic("Rhizobiaceae"))),
+  'Bacillaceae'=expression(paste(italic("Bacillaceae"))),
+  'Planococcaceae'=expression(paste(italic("Planococcaceae"))),
+  'Azospirillaceae'=expression(paste(italic("Azospirillaceae"))),
+  'Burkholderiaceae'=expression(paste(italic("Burkholderiaceae"))),
+  'Sphingomonadaceae'=expression(paste(italic("Sphingomonadaceae"))),
+  'Unknown'=expression(paste("Unknown")),
+  'Comamonadaceae'=expression(paste(italic("Comamonadaceae"))),
+  'Microbacteriaceae'=expression(paste(italic("Microbacteriaceae"))),
+  'Pirellulaceae'=expression(paste(italic("Pirellulaceae"))),
+  'Chitinophagaceae'=expression(paste(italic("Chitinophagaceae"))),
+  'Pseudonocardiaceae'=expression(paste(italic("Pseudonocardiaceae"))),
+  'Rickettsiaceae'=expression(paste(italic("Rickettsiaceae"))),
+  'Oxalobacteraceae'=expression(paste(italic("Oxalobacteraceae"))),
+  'Streptomycetaceae'=expression(paste(italic("Streptomycetaceae"))),
+  'Devosiaceae'=expression(paste(italic("Devosiaceae")))
+)
+
+family_ind_labeller <- function(variable,value){
+  return(family_ind_names[value])
+}
+
+#Make the plot
+ggplot(family_top_20_individual, aes(treatment_storage_days_factor, mean_abd, fill = Family)) +
+  facet_wrap(.~Family, scales = 'free', labeller = family_ind_labeller) +
+  geom_bar (stat="identity", colour = "black") +
+  geom_errorbar (aes(ymax = mean_abd + se_abd, ymin = mean_abd - se_abd), position=position_dodge(), width = 0.2, colour="black") +
+  ylab('Relative abundance') +
+  xlab('Treatment and storage time (days)') +
+  scale_fill_manual(values = family_palette) +
+  theme(legend.position="none") +
+  scale_x_discrete(labels=c('UT0','UT3','T3','UT10','T10')) +
+  theme(axis.text.x=element_text(size=11.5), axis.text.y=element_text(size=13), axis.title=element_text(size=18), strip.text.x = element_text(size = 13))
+
+#cowplot::ggsave2("Top20_Family_Relative_Abundance_Individuals.png", path = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Phyloseq/Results/Plots/Family_Relative_Abundance/With_Neg_Control_Contamination", width = 330, height = 330, units = "mm")
+
+############
+#Genera relative abundance plots (top 20 only)
+############
+#Produce phyloseq object with compositional abundance by genus
+pstree_cont_genera <- pstree_cont %>%
+  microbiome::aggregate_taxa(level = "Genus") %>%
+  microbiome::transform(transform = "compositional")
+#Pull out the 20 most abundant genera and subset the phyloseq object into just those families
+pstree_cont_genera_top20 = names(sort(phyloseq::taxa_sums(pstree_cont_genera), TRUE)[1:20])
+pstree_cont_genera_top20_new<-phyloseq::subset_taxa(pstree_cont_genera, Genus %in% pstree_cont_genera_top20)
+
+#Convert into dataframe and calculate mean, standard dev, standard error for each sample group
+pstree_cont_genera_top20_melt <- phyloseq::psmelt(pstree_cont_genera_top20_new)
+pstree_cont_genera_top20_melt_summary <- summarize(group_by(pstree_cont_genera_top20_melt, treatment_storage_days_factor, Genus),
+                                  mean_abd = mean(Abundance, na.rm = TRUE),
+                                  sd_abd = sd(Abundance, na.rm = TRUE),
+                                  se_abd = (sd_abd/sqrt(10)))
+
+#Need to add an 'other' genus to account for unaccounted relative abundance
+pstree_cont_genera_top20_melt_summary_other <- pstree_cont_genera_top20_melt_summary %>%
+  group_by(treatment_storage_days_factor) %>%
+  mutate(total_abd = sum(mean_abd)) %>%
+  mutate(other_abd = 1 - total_abd)
+other_genera_data <- pstree_cont_genera_top20_melt_summary_other %>%
+  group_by(treatment_storage_days_factor) %>%
+  summarise(
+    Genus = "Other",
+    mean_abd = other_abd
+  ) %>%
+     filter(!duplicated(treatment_storage_days_factor))
+
+final_genera_dataset <- bind_rows(pstree_cont_genera_top20_melt_summary, other_genera_data) %>%
+#Genera are made to be in levels of alphabetical order which is needed for the combined bar chart
+  mutate(Genus = factor(Genus, levels =c('Aeromonas','Citrobacter','Deinococcus','Devosia','Escherichia-Shigella','Limnobacter','Massilia','Methylophilus','Microbacterium','Nocardiopsis','Oceanobacillus','Paracoccus','Planomicrobium','Pseudomonas','Pseudonocardia','Rickettsia','Skermanella','Streptomyces','YC-ZSS-LKJ147','Unknown','Other'))) %>%
+  mutate(treatment_storage_days_factor = factor(treatment_storage_days_factor, levels = c('Untreated.0','Untreated.3','Treated.3','Untreated.10','Treated.10')))
+
+#Make labels for combined bar chart
+gen1 <- expression(paste(italic("Aeromonas")))
+gen2 <- expression(paste(italic("Citrobacter")))
+gen3 <- expression(paste(italic("Deinococcus")))
+gen4 <- expression(paste(italic("Devosia")))
+gen5 <- expression(paste(italic("Escherichia-Shigella")))
+gen6 <- expression(paste(italic("Limnobacter")))
+gen7 <- expression(paste(italic("Massilia")))
+gen8 <- expression(paste(italic("Methylophilus")))
+gen9 <- expression(paste(italic("Microbacterium")))
+gen10 <- expression(paste(italic("Nocardiopsis")))
+gen11 <- expression(paste(italic("Oceanobacillus")))
+gen12 <- expression(paste(italic("Paracoccus")))
+gen13 <- expression(paste(italic("Planomicrobium")))
+gen14 <- expression(paste(italic("Pseudomonas")))
+gen15 <- expression(paste(italic("Pseudonocardia")))
+gen16 <- expression(paste(italic("Rickettsia")))
+gen17 <- expression(paste(italic("Skermanella")))
+gen18 <- expression(paste(italic("Streptomyces")))
+gen19 <- expression(paste(italic("YC-ZSS-LKJ147")))
+gen20 <- expression(paste("Unknown"))
+gen21 <- expression(paste("Other"))
+
+#Make a colour palette of 20 different colours
+palette_20_genera = randomcoloR::distinctColorPalette(20, runTsne = TRUE)
+#Put the individual names of each genus into a dataframe
+genus_names <- as.data.frame(unique(phyloseq::tax_table(pstree_cont_genera_top20_new)[,"Genus"] ))
+#Now assign each colour in the palette a genus name
+names(palette_20_genera) <- sort(genus_names$Genus)
+
+#save palette object so it can be used in other charts without changing colours
+#save(palette_20_genera, file = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Phyloseq/R_Objects_for_Script/palette_20_genera.RData")
+#load("C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Phyloseq/R_Objects_for_Script/palette_20_genera.RData")
+
+#Add the additional grey colour to the genera palette
+genera_palette <- c(palette_20_genera, added_color)
+
+#Make the combined bar chart
+ggplot(final_genera_dataset, aes(treatment_storage_days_factor, mean_abd, fill=Genus)) +
+  geom_bar (stat="identity") +
+  scale_y_continuous(limits = c(-0.15, 1.01)) + 
+  ylab('Relative abundance') +
+  scale_fill_manual(values = genera_palette, labels = c(gen1,gen2,gen3,gen4,gen5,gen6,gen7,gen8,gen9,gen10,gen11,gen12,gen13,gen14,gen15,gen16,gen17,gen18,gen19,gen20,gen21)) +
+  annotate(x = 0.5, xend= 0.5, y=-0.09, yend=0, geom="segment", colour = "black", size = 0.5, alpha = 1) +
+  annotate(x = 1.5, xend= 1.5, y=-0.09, yend=0, geom="segment", colour = "black", size = 0.5, alpha = 1) +
+  annotate(x = 3.5, xend= 3.5, y=-0.09, yend=0, geom="segment", colour = "black", size = 0.5, alpha = 1) +
+  annotate(x = 5.5, xend= 5.5, y=-0.09, yend=0, geom="segment", colour = "black", size = 0.5, alpha = 1) +
+  #now add 'short line' segments to divide condition
+    annotate(x = 2.5, xend= 2.5, y=-0.04, yend=0, geom="segment", colour = "black", size = 0.5, alpha = 1) +
+    annotate(x = 4.5, xend= 4.5, y=-0.04, yend=0, geom="segment", colour = "black", size = 0.5, alpha = 1) +
+  #set the theme to classic and remove x axis labels and legend
+  theme_classic() +
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank()) +
+  #add treatment labels
+  annotate(geom = "text", x = 1, y = -0.02, label = 'Untreated', size = 8) +
+  annotate(geom = "text", x = 2, y = -0.02, label = 'Untreated', size = 8) +
+  annotate(geom = "text", x = 3, y = -0.02, label = 'Treated', size = 8) +
+  annotate(geom = "text", x = 4, y = -0.02, label = 'Untreated', size = 8) +
+  annotate(geom = "text", x = 5, y = -0.02, label = 'Treated', size = 8) +
+  #add day labels
+  annotate(geom = "text", x = 1, y = -0.07, label = '0', size = 8) +
+  annotate(geom = "text", x = 2.5, y = -0.07, label = '3', size = 8) +
+  annotate(geom = "text", x = 4.5, y = -0.07, label = '10', size = 8) +
+    annotate(geom = "text", x = 3, y = -0.12, label = 'Treatment and storage time (days)', size = 9.5) +
+  #remove the 'clip' and adjust position of chart so that axis' align with data
+  coord_cartesian(clip= "off", ylim=c(0.047,1), xlim=c(1,5)) +
+  theme(aspect.ratio = 1) + #need this to see added labels
+  guides(fill = guide_legend(ncol = 1)) +
+  theme(axis.text=element_text(size=25),axis.title=element_text(size=27), legend.title = element_text(size=27), legend.text = element_text(size=20), legend.text.align = 0)
+
+#cowplot::ggsave2("Top20_Genera_Relative_Abundance.png", path = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Phyloseq/Results/Plots/Genera_Relative_Abundance/With_Neg_Control_Contamination", width = 330, height = 330, units = "mm")
+
+#Individual plots of top 20 genera for thesis appendix - genera will appear in order of most abundant (left to right)
+print(pstree_cont_genera_top20) #shows order in terms of relative abundance
+genera_top_20_individual <- final_genera_dataset %>%
+    mutate(Genus = factor(Genus, levels =c("Pseudomonas", "Unknown", "Paracoccus", "Nocardiopsis", "Citrobacter", "Skermanella", "Oceanobacillus", "Limnobacter", "Pseudonocardia", "Rickettsia", "Streptomyces", "Escherichia-Shigella", "Deinococcus", "Planomicrobium", "Microbacterium", "YC-ZSS-LKJ147", "Aeromonas", "Devosia", "Massilia", "Methylophilus", "Other"))) %>%
+  filter(Genus != 'Other')
+
+#Make labels for individual top 20 genera charts
+genera_ind_names <- list(
+  'Pseudomonas'=expression(paste(italic('Pseudomonas'))),
+  'Unknown'=expression(paste('Unknown')),
+  'Paracoccus'=expression(paste(italic("Paracoccus"))),
+  'Nocardiopsis'=expression(paste(italic("Nocardiopsis"))),
+  'Citrobacter'=expression(paste(italic("Citrobacter"))),
+  'Skermanella'=expression(paste(italic("Skermanella"))),
+  'Oceanobacillus'=expression(paste(italic("Oceanobacillus"))),
+  'Limnobacter'=expression(paste(italic("Limnobacter"))),
+  'Pseudonocardia'=expression(paste(italic("Pseudonocardia"))),
+  'Rickettsia'=expression(paste(italic("Rickettsia"))),
+  'Streptomyces'=expression(paste(italic("Streptomyces"))),
+  'Escherichia-Shigella'=expression(paste(italic("Escherichia-Shigella"))),
+  'Deinococcus'=expression(paste(italic("Deinococcus"))),
+  'Planomicrobium'=expression(paste(italic("Planomicrobium"))),
+  'Microbacterium'=expression(paste(italic("Microbacterium"))),
+  'YC-ZSS-LKJ147'=expression(paste(italic("YC-ZSS-LKJ147"))),
+  'Aeromonas'=expression(paste(italic("Aeromonas"))),
+  'Devosia'=expression(paste(italic("Devosia"))),
+  'Massilia'=expression(paste(italic("Massilia"))),
+  'Methylophilus'=expression(paste(italic("Methylophilus")))
+)
+
+genera_ind_labeller <- function(variable,value){
+  return(genera_ind_names[value])
+}
+
+#Make the plot
+ggplot(genera_top_20_individual, aes(treatment_storage_days_factor, mean_abd, fill = Genus)) +
+  facet_wrap(.~Genus, scales = 'free', labeller = genera_ind_labeller) +
+  geom_bar (stat="identity", colour = "black") +
+  geom_errorbar (aes(ymax = mean_abd + se_abd, ymin = mean_abd - se_abd), position=position_dodge(), width = 0.2, colour="black") +
+  ylab('Relative abundance') +
+  xlab('Treatment and storage time (days)') +
+  scale_fill_manual(values = genera_palette) +
+  theme(legend.position="none") +
+  scale_x_discrete(labels=c('UT0','UT3','T3','UT10','T10')) +
+  theme(axis.text.x=element_text(size=11.5), axis.text.y=element_text(size=13), axis.title=element_text(size=18), strip.text.x = element_text(size = 13))
+
+#cowplot::ggsave2("Top20_Genera_Relative_Abundance_Individuals.png", path = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Phyloseq/Results/Plots/Genera_Relative_Abundance/With_Neg_Control_Contamination", width = 330, height = 330, units = "mm")
+
+###################
+#Exploratory analysis for thesis
+#To get percentages of proteobacteria
+Phylum_check <- filter(pstree_cont_phylum_melt_summary, Phylum == 'Proteobacteria')
+#To get percentages of Pseudomonadaceae
+Pseudomonadaceae_check <- filter(pstree_cont_family_top20_melt_summary, Family == 'Pseudomonadaceae')
+#To get percentages of Pseudomonas
+Pseudomonas_check <- filter(pstree_cont_genera_top20_melt_summary, Genus == 'Pseudomonas')
+
+#How much proteobacteria was pseudomonadaceae
+proteo_check<-phyloseq::subset_taxa(pstree_cont, Phylum == 'Proteobacteria')
+proteo_check_melt <- phyloseq::psmelt(proteo_check)
+colSums(proteo_check_melt[3]) #1120362 total proteobacteria reads
+
+proteo_pseud_check <- filter(proteo_check_melt, Family == 'Pseudomonadaceae')
+colSums(proteo_pseud_check[3]) #977780 total Pseudomonadaceae reads
+
+pseud_pseud_check <- filter(proteo_check_melt, Genus == 'Pseudomonas')
+colSums(pseud_pseud_check[3]) #977780 total Pseudomonas reads
+unique(pseud_pseud_check$OTU) #There were 41 total Pseudomonas ASVs detected
+
+#To check presence of ASV 2
+ASV_2_check <- filter(proteo_check_melt, OTU == 'ASV_2')
+colSums(ASV_2_check[3]) #863952 total ASV 2 reads
+
+977780/1120362 #87.3% of all proteobacteria were pseudomonas
+863952/1120362 #77.1% all proteobacteria reads were ASV 2
+863952/977780 #88.3% of all Pseudomonas reads were ASV 2
+
+###############################
+#Characteristation of untreated 0 sample
+###############################
+pstree_cont_untreated_zero = phyloseq::prune_samples(phyloseq::sample_data(pstree_cont)$treatment_storage_days_factor =='Untreated.0',pstree_cont)
+
+#Aggregate by phylum
+pstree_cont_phylum_untreated_zero <- pstree_cont_untreated_zero %>%
+  microbiome::aggregate_taxa(level = "Phylum") %>%
+  microbiome::transform(transform = "compositional")
+#Melt the object and do calculations
+pstree_cont_phylum_all_melt_zero <- phyloseq::psmelt(pstree_cont_phylum_untreated_zero)
+pstree_cont_phylum_all_melt_summary_zero <- summarize(group_by(pstree_cont_phylum_all_melt_zero, treatment_storage_days_factor, Phylum),
+                                  mean_abd = mean(Abundance, na.rm = TRUE),
+                                  sd_abd = sd(Abundance, na.rm = TRUE),
+                                  se_abd = (sd_abd/sqrt(10))) %>%
+  mutate(percent = mean_abd*100) %>%
+  mutate(se_percent = se_abd*100)
+
+#Aggregate by family
+pstree_cont_family_untreated_zero <- pstree_cont_untreated_zero %>%
+  microbiome::aggregate_taxa(level = "Family") %>%
+  microbiome::transform(transform = "compositional")
+#Melt the object and do calculations
+pstree_cont_family_all_melt_zero <- phyloseq::psmelt(pstree_cont_family_untreated_zero)
+pstree_cont_family_all_melt_summary_zero <- summarize(group_by(pstree_cont_family_all_melt_zero, treatment_storage_days_factor, Family),
+                                  mean_abd = mean(Abundance, na.rm = TRUE),
+                                  sd_abd = sd(Abundance, na.rm = TRUE),
+                                  se_abd = (sd_abd/sqrt(10))) %>%
+  mutate(percent = mean_abd*100) %>%
+  mutate(se_percent = se_abd*100)
+
+#Aggregate by Genus
+pstree_cont_genera_untreated_zero <- pstree_cont_untreated_zero %>%
+  microbiome::aggregate_taxa(level = "Genus") %>%
+  microbiome::transform(transform = "compositional")
+#Melt the object and do calculations
+pstree_cont_genera_all_melt_zero <- phyloseq::psmelt(pstree_cont_genera_untreated_zero)
+pstree_cont_genera_all_melt_summary_zero <- summarize(group_by(pstree_cont_genera_all_melt_zero, treatment_storage_days_factor, Genus),
+                                  mean_abd = mean(Abundance, na.rm = TRUE),
+                                  sd_abd = sd(Abundance, na.rm = TRUE),
+                                  se_abd = (sd_abd/sqrt(10))) %>%
+  mutate(percent = mean_abd*100) %>%
+  mutate(se_percent = se_abd*100)
+
+```
+
+
+#Section 5: Rarefaction curves
+
+##Section 6: Generation of rarefaction curves
+Rarefaction curves were produced for the pstree_cont object using 2 alpha diversity metrics: observed and Shannon.
+Observed metric = the direct number of different ASVs you have found (just richness).
+Shannon metric = measures entropy, which is the expected value of the surprise. If more ASVs are present, and they are more equal in proportion, it is more difficult to predict the next ASV you would pick out at random (so there would be a greater surprise) and the Shannon diversity index quantifies the uncertainty of predicting the next ASV.
+
+```{r,fig.width=15, fig.height=15, echo=FALSE, warning=FALSE}
+
+#######################################
+#CALCULATE ALPHA DIVERSITY
+calculate_rarefaction_curves <- function(pstree_cont, measures, depths) {
+  require('plyr') #ldply
+  require('reshape2') #melt
+  
+  estimate_rarified_richness <- function(pstree_cont, measures, depth) {
+    if(max(phyloseq::sample_sums(pstree_cont)) < depth) return()
+    pstree_cont <- phyloseq::prune_samples(phyloseq::sample_sums(pstree_cont) >= depth, pstree_cont)
+    
+    rarified_pstree_cont <- phyloseq::rarefy_even_depth(pstree_cont, depth, verbose = FALSE)
+    
+    alpha_diversity <- phyloseq::estimate_richness(rarified_pstree_cont, measures = measures)
+    
+     #as.matrix forces the use of melt.array, which includes the sample names (rownames)
+    molten_alpha_diversity <- melt(as.matrix(alpha_diversity), varnames = c('Sample', 'Measure'), value.name = 'Alpha_diversity')
+    
+    molten_alpha_diversity
+  }
+  
+  names(depths) <- depths # this enables automatic addition of the depth to the output by ldply
+  rarefaction_curve_data <- ldply(depths, estimate_rarified_richness, pstree_cont = pstree_cont, measures = measures, .id = 'Depth', .progress = ifelse(interactive(), 'text', 'none'))
+  
+   #convert depth from factor to numeric
+  rarefaction_curve_data$Depth <- as.numeric(levels(rarefaction_curve_data$Depth))[rarefaction_curve_data$Depth]
+  
+  rarefaction_curve_data
+}
+#The following parameters were changed - in the original code, it took alpha diversity measurements at 1 random read, 10 random reads, 100, 1000, and then at 10,000 intervals from 10,000 to 1,000,000 however this was changed to take measurements at 1, 10, 100 and then at 500 intervals from 500 to 150,000 (max reads in a sample was ~ 132,000). This was changed due to the large differences in sequencing depths across samples.
+
+rarefaction_curve_data <- calculate_rarefaction_curves(pstree_cont, c('Observed','Shannon'), rep(c(1, 10, 100, 1:300 * 500), each = 10))
+summary(rarefaction_curve_data)
+
+#SUMMARISE ALPHA DIVERSITY
+rarefaction_curve_data_summary <- ddply(rarefaction_curve_data, c('Depth', 'Sample', 'Measure'), summarise, Alpha_diversity_mean = mean(Alpha_diversity), Alpha_diversity_sd = sd(Alpha_diversity))
+
+#ADD SAMPLE DATA
+rarefaction_curve_data_summary_verbose_cont <- merge(rarefaction_curve_data_summary, data.frame(phyloseq::sample_data(pstree_cont)), by.x = 'Sample', by.y = 'row.names')
+
+#save(rarefaction_curve_data_summary_verbose_cont, file = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Phyloseq/R_Objects_for_Script/rarefaction_curve_data_summary_verbose_cont.RData")
+load("C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Phyloseq/R_Objects_for_Script/rarefaction_curve_data_summary_verbose_cont.RData")
+
+#########
+#MAKE THE PLOTS COLOURED BY TREATMENT AND STORAGE DAYS
+ggplot(
+  data = rarefaction_curve_data_summary_verbose_cont,
+  mapping = aes(
+    x = Depth,
+    y = Alpha_diversity_mean,
+    ymin = Alpha_diversity_mean - Alpha_diversity_sd,
+    ymax = Alpha_diversity_mean + Alpha_diversity_sd,
+    #color = Sample
+    color = treatment_storage_days_factor,
+    group = Sample
+  )
+) + geom_line(
+) + geom_pointrange(
+) + facet_wrap(
+  facets = ~ Measure,
+  scales = 'free_y'
+) + ylab("Alpha diversity") + 
+  xlab("Sequencing depth") + 
+  labs(color='Sample') +
+  scale_color_discrete(name = 'Treatment and\nstorage time (days)', labels = c('Untreated.0','Untreated.3','Treated.3','Untreated.10','Treated.10')) +
+  theme(axis.text.y =element_text(size=20),axis.title=element_text(size=24), legend.title = element_text(size=22), legend.text = element_text(size=20), legend.position="right", strip.text.x = element_text(size = 23), axis.text.x=element_text(size=18)) +
+  geom_vline(xintercept = 7400, linetype="dashed", 
+                color = "blue", size=1.5) +
+  geom_vline(xintercept = 25000, color = "black", size=1.5) #+
+ # xlim(0,25000) #add this for the <25,000 depth plot and then can change to 5000 for the <5000 depth plot
+
+#cowplot::ggsave2("Rarefaction_Curve_NC_Full.png", path = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Phyloseq/Results/Plots/Rarefaction_Curves/With_Neg_Control_Contamination", width = 330, height = 330, units = "mm")
+#Can subsequently change plot titles to include 25,000 or 5,000 depth info if this is the selected x lim
+
+```
+
+Rarefaction curves looked okay and indicated that most of the diversity had been captured within the read depth of each sample.
+The Shannon metric curve looked complete in all samples - most of the diversity was caught within the first 1000 reads. The observed metric took more reads to level off at, but again, most samples did level off. 
+
+##Section 7: Sample rarefaction
+The rarefaction curves are typically used to select a sequencing depth for capturing the diversity.
+This deals with the fact that you can't directly compare alpha diversity metrics from library's of different sizes due to a bias that you are more likely to find greater diversity in library's which have greater sequencing depth. Rarefying however causes a lot of data to be thrown away.
+
+The number of samples that would be thrown away at different rarefaction depths were checked.
+
+```{r}
+
+min(phyloseq::sample_sums(pstree_cont)) #7408 was the min sequencing depth
+#Sampled were therefore rarefied to 7400 reads
+
+```
+
+7400 was the selected sequencing depth for rarefaction because no samples would be lost and most diversity was covered in this.
+
+##Sample rarefaction
+The pstree_cont object will be rarefied to 7400 reads respectively.
+Note that in the code, it's very important that we we set a random number seed so that the workflow is reproducible.
+
+```{r}
+
+#########
+#7400 reads rarefaction
+
+#sample(1:1000000, 1) #129096
+#pstree_cont_rare_7400<-phyloseq::rarefy_even_depth(pstree_cont,7400,rngseed = 129096)
+
+#save(pstree_cont_rare_7400, file = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Phyloseq/R_Objects_for_Script/pstree_cont_rare_7400.RData")
+load("C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Phyloseq/R_Objects_for_Script/pstree_cont_rare_7400.RData")
+
+```
+
+#Section 8: Production of individual phyloseq objects
+
+##Production of individual phyloseq objects to contain the data to answer one of the four questions.
+This was completed to provide phyloseq objects which stats could be completed on for alpha diversity analysis, therefore individual phyloseq objects were rarefied.
+
+The questions and the data needed to answer each question:
+1. How is the native microbiome changing overtime, without treatment? (day 0 untreated vs day 3 untreated vs day 10 untreated)? 
+= pstree_native_ut, pstree_cont_native_ut, pstree_rare_native_ut, pstree_cont_rare_native_ut
+2. How has ozone treatment at day 0 changed the native microbiome overtime? (day 0 untreated vs day 3 treated vs day 10 treated)? 
+= pstree_native_t, pstree_cont_native_t, pstree_rare_native_t, pstree_cont_rare_native_t
+3. How does the treated and untreated microbiome compare at day 3 (day 3 untreated vs day 3 treated)? 
+= pstree_day3, pstree_cont_day3, pstree_rare_day3, pstree_cont_rare_day3
+4. How does the treated and untreated microbiome compare at day 10 (day 10 untreated vs day 10 treated)? = pstree_day10, pstree_cont_day10, pstree_rare_day10, pstree_cont_rare_day10
+
+```{r}
+
+#pstree_cont_rare_7400.ut10 = phyloseq::prune_samples(phyloseq::sample_data(pstree_cont_rare_7400)$treatment_storage_days_factor =='Untreated.10',pstree_cont)
+#pstree_cont_rare_7400.ut0 = phyloseq::prune_samples(phyloseq::sample_data(pstree_cont_rare_7400)$treatment_storage_days_factor =='Untreated.0',pstree_cont)
+#pstree_cont_rare_7400.ut3 = phyloseq::prune_samples(phyloseq::sample_data(pstree_cont_rare_7400)$treatment_storage_days_factor =='Untreated.3',pstree_cont)
+#pstree_cont_rare_7400.t3 = phyloseq::prune_samples(phyloseq::sample_data(pstree_cont_rare_7400)$treatment_storage_days_factor =='Treated.3',pstree_cont)
+#pstree_cont_rare_7400.t10 = phyloseq::prune_samples(phyloseq::sample_data(pstree_cont_rare_7400)$treatment_storage_days_factor =='Treated.10',pstree_cont)
+
+#pstree_cont_rare_7400_native_ut = phyloseq::merge_phyloseq(pstree_cont_rare_7400.ut0, pstree_cont_rare_7400.ut3, pstree_cont_rare_7400.ut10)
+#pstree_cont_rare_7400_native_ut = phyloseq::prune_taxa(phyloseq::taxa_sums(pstree_cont_rare_7400_native_ut)>0,pstree_cont_rare_7400_native_ut)
+
+#pstree_cont_rare_7400_native_t = phyloseq::merge_phyloseq(pstree_cont_rare_7400.ut0, pstree_cont_rare_7400.t3, pstree_cont_rare_7400.t10)
+#pstree_cont_rare_7400_native_t = phyloseq::prune_taxa(phyloseq::taxa_sums(pstree_cont_rare_7400_native_t)>0,pstree_cont_rare_7400_native_t)
+
+#pstree_cont_rare_7400_day3 = phyloseq::merge_phyloseq(pstree_cont_rare_7400.ut3, pstree_cont_rare_7400.t3)
+#pstree_cont_rare_7400_day3 = phyloseq::prune_taxa(phyloseq::taxa_sums(pstree_cont_rare_7400_day3)>0,pstree_cont_rare_7400_day3)
+
+#pstree_cont_rare_7400_day10 = phyloseq::merge_phyloseq(pstree_cont_rare_7400.ut10, pstree_cont_rare_7400.t10)
+#pstree_cont_rare_7400_day10 = phyloseq::prune_taxa(phyloseq::taxa_sums(pstree_cont_rare_7400_day10)>0,pstree_cont_rare_7400_day10)
+#########
+#save objects
+#save(pstree_cont_rare_7400_native_ut, file = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Phyloseq/R_Objects_for_Script/pstree_cont_rare_7400_native_ut.RData")
+
+#save(pstree_cont_rare_7400_native_t, file = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Phyloseq/R_Objects_for_Script/pstree_cont_rare_7400_native_t.RData")
+
+#save(pstree_cont_rare_7400_day3, file = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Phyloseq/R_Objects_for_Script/pstree_cont_rare_7400_day3.RData")
+
+#save(pstree_cont_rare_7400_day10, file = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Phyloseq/R_Objects_for_Script/pstree_cont_rare_7400_day10.RData")
+
+####Load objects
+load("C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Phyloseq/R_Objects_for_Script/pstree_cont_rare_7400_native_ut.RData")
+load("C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Phyloseq/R_Objects_for_Script/pstree_cont_rare_7400_native_t.RData")
+load("C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Phyloseq/R_Objects_for_Script/pstree_cont_rare_7400_day3.RData")
+load("C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Phyloseq/R_Objects_for_Script/pstree_cont_rare_7400_day10.RData")
+
+```
+
+#Section 9: Alpha diversity analysis
+The observed and Shannon metrics were used to analyse the alpha diversity of the samples. Rarefied data was analysed.
+
+```{r}
+##############################
+#STATS ON INDIVIDUAL PHYLOSEQ OBJECTS
+##############################
+#Richness estimated on entire object
+##############
+#native ut
+####
+pstree_cont_rare_richness_7400_native_ut<-phyloseq::estimate_richness(pstree_cont_rare_7400_native_ut,measures=c("Observed","Shannon"))
+pstree_cont_rare_richness_7400_native_ut$Sample_ID<-rownames(pstree_cont_rare_richness_7400_native_ut)
+head(pstree_cont_rare_richness_7400_native_ut)
+pstree_cont_rare_richness_7400_native_ut<-left_join(pstree_cont_rare_richness_7400_native_ut,metadata,"Sample_ID") #add metadata by sample ID
+
+kruskal.test(Observed ~ treatment_storage_days,
+             data = pstree_cont_rare_richness_7400_native_ut) #p = 0.045 so significant
+kruskal.test(Shannon ~ treatment_storage_days,
+             data = pstree_cont_rare_richness_7400_native_ut) #p = 0.326 so not significant
+
+observed_test_native_ut = FSA::dunnTest(Observed ~ treatment_storage_days,
+              data=pstree_cont_rare_richness_7400_native_ut,
+              method="bonferroni")  
+observed_test_native_ut #no sig differences
+
+###############
+#native t
+##############
+pstree_cont_rare_richness_7400_native_t<-phyloseq::estimate_richness(pstree_cont_rare_7400_native_t,measures=c("Observed","Shannon"))
+pstree_cont_rare_richness_7400_native_t$Sample_ID<-rownames(pstree_cont_rare_richness_7400_native_t)
+head(pstree_cont_rare_richness_7400_native_t)
+pstree_cont_rare_richness_7400_native_t<-left_join(pstree_cont_rare_richness_7400_native_t,metadata,"Sample_ID") #add metadata by sample ID
+
+kruskal.test(Observed ~ treatment_storage_days,
+             data = pstree_cont_rare_richness_7400_native_t) #p = 0.001348 so significant
+kruskal.test(Shannon ~ treatment_storage_days,
+             data = pstree_cont_rare_richness_7400_native_t) #p = 0.009279 so significant
+
+observed_test_native_t = FSA::dunnTest(Observed ~ treatment_storage_days,
+              data=pstree_cont_rare_richness_7400_native_t,
+              method="bonferroni")  
+observed_test_native_t #T10 AND UT p = 0.0008325192 so significant
+
+shannon_test_native_t = FSA::dunnTest(Shannon ~ treatment_storage_days,
+              data=pstree_cont_rare_richness_7400_native_t,
+              method="bonferroni")  
+shannon_test_native_t #T10 AND UT p = 0.006911028 so significant
+############
+#3 days
+###########
+pstree_cont_rare_richness_7400_day3<-phyloseq::estimate_richness(pstree_cont_rare_7400_day3,measures=c("Observed","Shannon"))
+pstree_cont_rare_richness_7400_day3$Sample_ID<-rownames(pstree_cont_rare_richness_7400_day3)
+head(pstree_cont_rare_richness_7400_day3)
+pstree_cont_rare_richness_7400_day3<-left_join(pstree_cont_rare_richness_7400_day3,metadata,"Sample_ID") #add metadata by sample ID
+
+kruskal.test(Observed ~ treatment_storage_days,
+             data = pstree_cont_rare_richness_7400_day3) #p = 0.4494 so not significant
+kruskal.test(Shannon ~ treatment_storage_days,
+             data = pstree_cont_rare_richness_7400_day3) #p = 0.5453 so not significant
+
+############
+#10 days
+###########
+pstree_cont_rare_richness_7400_day10<-phyloseq::estimate_richness(pstree_cont_rare_7400_day10,measures=c("Observed","Shannon"))
+pstree_cont_rare_richness_7400_day10$Sample_ID<-rownames(pstree_cont_rare_richness_7400_day10)
+head(pstree_cont_rare_richness_7400_day10)
+pstree_cont_rare_richness_7400_day10<-left_join(pstree_cont_rare_richness_7400_day10,metadata,"Sample_ID") #add metadata by sample ID
+
+kruskal.test(Observed ~ Treatment,
+             data = pstree_cont_rare_richness_7400_day10) #p = 0.000865 so significant
+kruskal.test(Shannon ~ Treatment,
+             data = pstree_cont_rare_richness_7400_day10) #p = 0.005159 so significant
+
+########################################################
+#ALPHA DIVERSITY FOR ALL SAMPLES WILL BE PRESENTED ON ONE CHART FOR SIMPLICITY
+########################################################
+#Observed plot
+
+p3 <- ggplot(pstree_cont_rare_richness_7400,aes(x=treatment_storage_days,y=Observed)) +
+  geom_jitter(aes(), size = 4) + 
+  geom_boxplot(alpha = 0.5, fill = "darkorchid1", outlier.shape = NA) +
+  theme_bw() + 
+  labs(x="Treatment and storage days",y="Alpha diversity (observed)") +
+  #ggtitle("Observed diversity") + 
+  geom_signif(annotation = c("**"),textsize=15, xmin = 1, xmax = 5,y_position = 495) + 
+  geom_signif(annotation = c("**"),textsize=15, xmin = 4, xmax = 5,y_position = 445) + 
+  scale_y_continuous(limits = c(-80, 500)) + 
+  annotate(x = 0.5, xend= 0.5, y=-60, yend=0, geom="segment", colour = "black", size = 0.5, alpha = 1) +
+  annotate(x = 1.5, xend= 1.5, y=-60, yend=0, geom="segment", colour = "black", size = 0.5, alpha = 1) +
+  annotate(x = 3.5, xend= 3.5, y=-60, yend=0, geom="segment", colour = "black", size = 0.5, alpha = 1) +
+  annotate(x = 5.5, xend= 5.5, y=-60, yend=0, geom="segment", colour = "black", size = 0.5, alpha = 1) +
+  #now add 'short line' segments to divide condition
+    annotate(x = 2.5, xend= 2.5, y=-30, yend=0, geom="segment", colour = "black", size = 0.5, alpha = 1) +
+    annotate(x = 4.5, xend= 4.5, y=-30, yend=0, geom="segment", colour = "black", size = 0.5, alpha = 1) +
+  #set the theme to classic and remove x axis labels and legend
+  theme_classic() +
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank()) +
+  #add treatment labels
+  annotate(geom = "text", x = 1, y = -20, label = 'Untreated', size = 9) +
+  annotate(geom = "text", x = 2, y = -20, label = 'Untreated', size = 9) +
+  annotate(geom = "text", x = 3, y = -20, label = 'Treated', size = 9) +
+  annotate(geom = "text", x = 4, y = -20, label = 'Untreated', size = 9) +
+  annotate(geom = "text", x = 5, y = -20, label = 'Treated', size = 9) +
+  #add day labels
+  annotate(geom = "text", x = 1, y = -50, label = '0', size = 9) +
+  annotate(geom = "text", x = 2.5, y = -50, label = '3', size = 9) +
+  annotate(geom = "text", x = 4.5, y = -50, label = '10', size = 9) +
+    annotate(geom = "text", x = 3, y = -80, label = 'Treatment and storage time (days)', size = 10) +
+  #remove the 'clip' and adjust position of chart so that axis' align with data
+  coord_cartesian(clip= "off", ylim=c(24,500), xlim=c(1,5)) +
+  theme(aspect.ratio = 0.8) + #need this to see added labels
+  theme(axis.text=element_text(size=28),axis.title=element_text(size=30)) 
+
+#Shannon plot
+p4 <- ggplot(pstree_cont_rare_richness_7400,aes(x=treatment_storage_days,y=Shannon)) +
+  geom_jitter(aes(), size = 4) + 
+  geom_boxplot(alpha = 0.5, fill = "darkorchid1", outlier.shape = NA) +
+  theme_bw() + 
+  labs(x="Treatment and storage days",y="Alpha diversity (Shannon)") +
+  #ggtitle("Shannon diversity") + 
+  geom_signif(annotation = c("*"),textsize=15, xmin = 1, xmax = 5,y_position = 5.35) + 
+    geom_signif(annotation = c("*"),textsize=15, xmin = 4, xmax = 5,y_position = 4.90) +
+  scale_y_continuous(limits = c(-0.8, 5.5)) + 
+  annotate(x = 0.5, xend= 0.5, y=-0.6, yend=0, geom="segment", colour = "black", size = 0.5, alpha = 1) +
+  annotate(x = 1.5, xend= 1.5, y=-0.6, yend=0, geom="segment", colour = "black", size = 0.5, alpha = 1) +
+  annotate(x = 3.5, xend= 3.5, y=-0.6, yend=0, geom="segment", colour = "black", size = 0.5, alpha = 1) +
+  annotate(x = 5.5, xend= 5.5, y=-0.6, yend=0, geom="segment", colour = "black", size = 0.5, alpha = 1) +
+  #now add 'short line' segments to divide condition
+    annotate(x = 2.5, xend= 2.5, y=-0.3, yend=0, geom="segment", colour = "black", size = 0.5, alpha = 1) +
+    annotate(x = 4.5, xend= 4.5, y=-0.3, yend=0, geom="segment", colour = "black", size = 0.5, alpha = 1) +
+  #set the theme to classic and remove x axis labels and legend
+  theme_classic() +
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank()) +
+  #add treatment labels
+  annotate(geom = "text", x = 1, y = -0.2, label = 'Untreated', size = 9) +
+  annotate(geom = "text", x = 2, y = -0.2, label = 'Untreated', size = 9) +
+  annotate(geom = "text", x = 3, y = -0.2, label = 'Treated', size = 9) +
+  annotate(geom = "text", x = 4, y = -0.2, label = 'Untreated', size = 9) +
+  annotate(geom = "text", x = 5, y = -0.2, label = 'Treated', size = 9) +
+  #add day labels
+  annotate(geom = "text", x = 1, y = -0.5, label = '0', size = 9) +
+  annotate(geom = "text", x = 2.5, y = -0.5, label = '3', size = 9) +
+  annotate(geom = "text", x = 4.5, y = -0.5, label = '10', size = 9) +
+    annotate(geom = "text", x = 3, y = -0.8, label = 'Treatment and storage time (days)', size = 10) +
+  #remove the 'clip' and adjust position of chart so that axis' align with data
+  coord_cartesian(clip= "off", ylim=c(0.24,5), xlim=c(1,5)) +
+  theme(aspect.ratio = 0.8) + #need this to see added labels
+  theme(axis.text=element_text(size=28),axis.title=element_text(size=30)) 
+
+#Combine observed and shannon diversity into one plot
+prow <- cowplot::plot_grid(
+  p3 + theme(axis.text=element_text(size=25),axis.title=element_text(size=28)),
+  p4 + theme(axis.text=element_text(size=25),axis.title=element_text(size=28)),
+  align = 'vh',
+  hjust = -1,
+  vjust = 4,
+  nrow = 1,
+  labels = "AUTO", 
+  label_size = 30
+)
+
+#Add the legend underneath the figure panel that was made above (prow). Give it 10% of the height of one plot (via rel_heights).
+cowplot::plot_grid(prow)
+cowplot::ggsave2('Combined_plots.png', width=20, height = 10, path = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Phyloseq/Results/Plots/Alpha_Diversity/With_Neg_Control_Contamination_(Rarefied_7400)")
+
+
+```
+

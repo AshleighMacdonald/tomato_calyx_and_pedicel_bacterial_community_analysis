@@ -1,0 +1,654 @@
+---
+title: "Differential abundance analysis"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include=FALSE}
+#INSTALL PACKAGES
+install.packages("tidyverse")
+install.packages("permute")
+install.packages("lattice")
+install.packages("data.table")
+install.packages("RColorBrewer")
+install.packages("vegan")
+install.packages("lme4")
+install.packages("cowplot")
+install.packages("ggsignif")
+install.packages("FSA")
+install.packages('randomcoloR')
+
+BiocManager::install("microbiome")
+BiocManager::install("phyloseq")
+BiocManager::install("DESeq2")
+
+#LOAD PACKAGES
+library(tidyverse)
+library(permute)
+library(lattice)
+library(data.table)
+library(RColorBrewer)
+library(vegan)
+library(lme4)
+library(cowplot)
+library(microbiome)
+library(randomcoloR)
+library(phyloseq)
+library(DESeq2)
+library(ggsignif)
+library(FSA)
+```
+#Section 13: Differential abundance analysis
+
+First subset the non-transformed phyloseq object into the different groups that are required to answer each question.
+This is because DESeq2 is a package for differential abundance testing. Non-transformed data is fed into the package because it completes an in-built data transformation.
+
+The questions and the data needed to answer each question:
+1. How is the native microbiome changing overtime, without treatment? (day 0 untreated vs day 3 untreated vs day 10 untreated)? 
+= pstree_native_ut, pstree_cont_native_ut, pstree_rare_native_ut, pstree_cont_rare_native_ut
+2. How has ozone treatment at day 0 changed the native microbiome overtime? (day 0 untreated vs day 3 treated vs day 10 treated)? 
+= pstree_native_t, pstree_cont_native_t, pstree_rare_native_t, pstree_cont_rare_native_t
+3. How does the treated and untreated microbiome compare at day 3 (day 3 untreated vs day 3 treated)? 
+= pstree_day3, pstree_cont_day3, pstree_rare_day3, pstree_cont_rare_day3
+4. How does the treated and untreated microbiome compare at day 10 (day 10 untreated vs day 10 treated)? = pstree_day10, pstree_cont_day10, pstree_rare_day10, pstree_cont_rare_day10
+```{r}
+
+#Load main phyloseq object
+load("C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/4_Phyloseq/R_Objects_for_Script/pstree_cont.RData")
+
+#Subset it into the groups
+#pstree_cont.ut10 = prune_samples(phyloseq::sample_data(pstree_cont)$treatment_storage_days_factor =='Untreated.10',pstree_cont)
+#pstree_cont.ut0 = prune_samples(phyloseq::sample_data(pstree_cont)$treatment_storage_days_factor =='Untreated.0',pstree_cont)
+#pstree_cont.ut3 = prune_samples(phyloseq::sample_data(pstree_cont)$treatment_storage_days_factor =='Untreated.3',pstree_cont)
+#pstree_cont.t3 = prune_samples(phyloseq::sample_data(pstree_cont)$treatment_storage_days_factor =='Treated.3',pstree_cont)
+#pstree_cont.t10 = prune_samples(phyloseq::sample_data(pstree_cont)$treatment_storage_days_factor =='Treated.10',pstree_cont)
+
+#pstree_cont_native_ut = merge_phyloseq(pstree_cont.ut0, pstree_cont.ut3, pstree_cont.ut10)
+#pstree_cont_native_ut = prune_taxa(taxa_sums(pstree_cont_native_ut)>0,pstree_cont_native_ut)
+
+#pstree_cont_native_t = merge_phyloseq(pstree_cont.ut0, pstree_cont.t3, pstree_cont.t10)
+#pstree_cont_native_t = prune_taxa(taxa_sums(pstree_cont_native_t)>0,pstree_cont_native_t)
+
+#pstree_cont_day3 = merge_phyloseq(pstree_cont.ut3, pstree_cont.t3)
+#pstree_cont_day3 = prune_taxa(taxa_sums(pstree_cont_day3)>0,pstree_cont_day3)
+
+#pstree_cont_day10 = merge_phyloseq(pstree_cont.ut10, pstree_cont.t10)
+#pstree_cont_day10 = prune_taxa(taxa_sums(pstree_cont_day10)>0,pstree_cont_day10)
+
+#########
+#save objects
+#save(pstree_cont_native_ut, file = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Further_Data_Analysis/R_Objects_for_Script/pstree_cont_native_ut.RData")
+#save(pstree_cont_native_t, file = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Further_Data_Analysis/R_Objects_for_Script/pstree_cont_native_t.RData")
+#save(pstree_cont_day3, file = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Further_Data_Analysis/R_Objects_for_Script/pstree_cont_day3.RData")
+#save(pstree_cont_day10, file = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Further_Data_Analysis/R_Objects_for_Script/pstree_cont_day10.RData")
+
+####Load objects
+load("C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Further_Data_Analysis/R_Objects_for_Script/pstree_cont_native_ut.RData")
+load("C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Further_Data_Analysis/R_Objects_for_Script/pstree_cont_native_t.RData")
+load("C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Further_Data_Analysis/R_Objects_for_Script/pstree_cont_day3.RData")
+load("C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Further_Data_Analysis/R_Objects_for_Script/pstree_cont_day10.RData")
+
+```
+
+##Differential abundance testing with Deseq2
+The following are different functions required for dealing with data in Deseq2 (obtained from Physalia courses - 16S metabarcoding course).
+
+```{r}
+#Vegan OTU_function (previously made) needs to be loaded into this script
+vegan_otu <- function(physeq) {
+  OTU <- otu_table(physeq)
+  if (taxa_are_rows(OTU)) {
+     OTU <- t(OTU)
+   }
+  return(as(OTU, "matrix"))
+}
+
+#Function to handle results objects and annotate with taxonomy
+taxo<-function(resultsobject,physeqobject,alpha){
+  sigtab<-resultsobject[which(resultsobject$padj<alpha),]
+  sigtab<- cbind(as(sigtab, "data.frame"), as(tax_table(physeqobject)[rownames(sigtab), ], "matrix"))
+  colnames(sigtab)[7:12]<-c("Kingdom","Phylum","Class","Order","Family","Genus")
+  return(sigtab)
+  }          
+    
+#Function To calculate geometric means
+gm_mean = function(x, na.rm=TRUE){
+  exp(sum(log(x[x > 0]), na.rm=na.rm) / length(x))
+} 
+    
+#Function to parse significant data from DESeq2 results
+deseqplot_data<-function(sigtab){
+#Phylum order
+  x = tapply(sigtab$log2FoldChange, sigtab$Phylum, function(x) max(x))
+  x = sort(x, TRUE)
+  sigtab$Phylum = factor(as.character(sigtab$Phylum), levels=names(x))
+#Copy across genus labels and fill in any unassigned
+  sigtab$Genus.long<-as.character(sigtab$Genus)
+  sigtab$Genus.long[grep("unclassified",sigtab$Genus)] <-paste0("[",as.character(sigtab$Family[grep("unclassified",sigtab$Genus)]),"]")
+#Genus order
+  x = tapply(sigtab$log2FoldChange, sigtab$Genus.long, function(x) max(x))
+  x = sort(x, TRUE)
+  sigtab$Genus.long = factor(as.character(sigtab$Genus.long), levels=names(x))
+  return(sigtab)
+  }
+
+```
+  
+Deseq2 was now completed on data.
+
+```{r}
+########################
+#TREATMENT LEVELS
+#################
+#pstree_cont_day10
+#################
+#Fit the deseq model using The function in phyloseq - this converts the data into a format DESeq can read
+pstree_cont_day10_deseq <-phyloseq_to_deseq2(pstree_cont_day10, ~ treatment_factor)
+
+#Calculation of size factors (this was done separately because doing this in DESeq2 sometimes caused the model to fall over due to zero inflated data)
+#See https://bioconductor.org/packages/devel/bioc/vignettes/phyloseq/inst/doc/phyloseq-mixture-models.html for code
+geoMeans = apply(DESeq2::counts(pstree_cont_day10_deseq), 1, gm_mean)
+pstree_cont_day10_deseq = DESeq2::estimateSizeFactors(pstree_cont_day10_deseq, geoMeans = geoMeans)
+pstree_cont_day10_deseq = DESeq2::DESeq(pstree_cont_day10_deseq, fitType="local", test="Wald")
+#Wald is a type of test to determine if an ASV is signficant 
+#'Note: The default multiple-inference correction is Benjamini-Hochberg, and occurs within the DESeq function.'
+
+#Extract results and specify contrasts wanted - treated will be compared against untreated
+pstree_cont_day10_deseq_results<-DESeq2::results(pstree_cont_day10_deseq,contrast=c("treatment_factor","Treated","Untreated"))
+
+head(pstree_cont_day10_deseq_results) 
+#shows we're comparing treated to untreated - change in abundance of an ASV when you're in treated samples relative to untreated - we've estimated the log2 fold change of treated vs untreated.
+#log2fold change = 2 to the power of this number will tell you the times wise difference in abundance across the two samples.
+#Positive means more abundant in treated, negative means more abundant in untreated
+
+#Annotate with the taxonomy
+pstree_cont_day10_deseq_results_taxa<-taxo(pstree_cont_day10_deseq_results,pstree_cont_day10,0.05) #will pull out anything with adjusted p-value below this threshold significance 
+#Store the data into a format which can be plotted with ggplot
+pstree_cont_day10_deseq_plot_data<-deseqplot_data(pstree_cont_day10_deseq_results_taxa)
+#Put in alphabetical order by genus
+pstree_cont_day10_deseq_plot_data <- pstree_cont_day10_deseq_plot_data[order(pstree_cont_day10_deseq_plot_data$Genus), ]
+#Note that no genus was NA
+
+#Generate Plot
+day10<- ggplot(pstree_cont_day10_deseq_plot_data,aes(x=Genus.long, y=log2FoldChange)) +
+  geom_point (shape=21,size=10,aes(fill=Phylum)) +
+  scale_fill_manual(values = c('Proteobacteria' = 'red', 'Deinococcota' = 'grey', 'Actinobacteriota' = 'turquoise1'))+
+  theme_classic() +
+  ggtitle("Day 10: treated vs untreated") +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5,size=40)) +
+  geom_hline(yintercept = 0,linetype="dashed") +
+  labs(x="Genus", y='Log2 fold change') +
+  scale_shape_manual(values=c(21,22,23,24,25)) +
+  theme(text = element_text(size = 40)) +
+  theme(legend.position="right",axis.text=element_text(size=40),axis.title=element_text(size=40),axis.text.x = element_text(face="italic"), legend.text = element_text(size=40),legend.title = element_text(size=40))
+
+#cowplot::ggsave2("Day10_DeSeq2_Plot_with_NC_ASVs.png", width=20, height = 20, path = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Further_Data_Analysis/Results/DeSeq2_Plots/With_Neg_Control_Cont")
+
+#################
+#pstree_cont_day3
+#################
+#deseq form
+pstree_cont_day3_deseq <-phyloseq_to_deseq2(pstree_cont_day3, ~ treatment_factor)
+
+#Calculate size factors
+geoMeans = apply(counts(pstree_cont_day3_deseq), 1, gm_mean)
+pstree_cont_day3_deseq = estimateSizeFactors(pstree_cont_day3_deseq, geoMeans = geoMeans)
+pstree_cont_day3_deseq = DESeq(pstree_cont_day3_deseq, fitType="local", test="Wald")
+
+#Extract results and specify contrasts
+pstree_cont_day3_deseq_results<-results(pstree_cont_day3_deseq,contrast=c("treatment_factor","Treated","Untreated"))
+
+head(pstree_cont_day3_deseq_results) 
+
+#Annotate with the taxonomy
+pstree_cont_day3_deseq_results_taxa<-taxo(pstree_cont_day3_deseq_results,pstree_cont_day3,0.05)
+
+#ggplot form
+pstree_cont_day3_deseq_plot_data<-deseqplot_data(pstree_cont_day3_deseq_results_taxa)
+#Put in alphabetical order by genus
+pstree_cont_day3_deseq_plot_data <- pstree_cont_day3_deseq_plot_data[order(pstree_cont_day3_deseq_plot_data$Genus), ]
+#Note that no genus was NA
+
+#Generate Plot
+day3 <- ggplot(pstree_cont_day3_deseq_plot_data,aes(x=Genus.long, y=log2FoldChange)) +
+  geom_point (shape=21,size=10,aes(fill=Phylum)) +
+  scale_fill_manual(values = c('Proteobacteria' = 'red'))+
+  theme(legend.position = 'bottom') +
+  theme_classic() +
+  ggtitle("Day 3: treated vs untreated") +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5,size=40)) +
+  geom_hline(yintercept = 0,linetype="dashed") +
+  labs(x="Genus", y='Log2 fold change') +
+  scale_shape_manual(values=c(21,22,23,24,25)) +
+  theme(text = element_text(size = 40)) +
+  theme(legend.position="right",axis.text=element_text(size=40), axis.text.x = element_text(face="italic"), axis.title=element_text(size=40),legend.text = element_text(size=40),legend.title = element_text(size=40))
+
+#cowplot::ggsave2("Day3_DeSeq2_Plot_with_NC_ASVs.png", width=20, height = 20, path = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Further_Data_Analysis/Results/DeSeq2_Plots/With_Neg_Control_Cont")
+
+################################
+#Combined plot for data from day 3 and day 10
+
+pday <- cowplot::plot_grid(
+  day3 + theme(legend.position="none", axis.text=element_text(size=40),axis.title=element_text(size=50),plot.title=element_text(size=65)),
+  day10 + theme(legend.position="none", axis.text=element_text(size=40),axis.title=element_text(size=50),plot.title=element_text(size=65)),
+  align = 'vh',
+  hjust = -0.5,
+  # vjust = 1,
+  nrow = 1 ,
+  labels = "AUTO",
+  label_size = 70
+  )
+
+#Extract the legend from a plot and make it horizontal
+legend_day <- get_legend(
+  day10 +
+    guides(color = guide_legend(nrow = 2)) +
+    theme(legend.position = "bottom", legend.title = element_text(size=65), legend.text = element_text(size=60))
+  )
+
+#Add the legend underneath the figure panel that was made above (prow). Give it 10% of the height of one plot (via rel_heights).
+cowplot::plot_grid(pday, legend_day, ncol = 1, rel_heights = c(1, .1))
+
+#cowplot::ggsave2("Both_days.png", width=40, height = 20, path = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Further_Data_Analysis/Results/DeSeq2_Plots/With_Neg_Control_Cont")
+
+########################################################
+#STORAGE LEVELS FACTORS
+#######################################################
+#################
+#pstree_cont_native_ut
+#################
+#For multiple factors, a model can be fitted
+#deseq form
+pstree_cont_native_ut_deseq <-phyloseq_to_deseq2(pstree_cont_native_ut, ~ storage_days_factor)
+
+#Calculate size factors
+geoMeans = apply(counts(pstree_cont_native_ut_deseq), 1, gm_mean)
+pstree_cont_native_ut_deseq = estimateSizeFactors(pstree_cont_native_ut_deseq, geoMeans = geoMeans)
+pstree_cont_native_ut_deseq = DESeq(pstree_cont_native_ut_deseq, fitType="local", test="Wald")
+
+#Extract results and specify contrasts
+#Can only specify one pair-wise contrast from results at one time
+############
+#Day 3 vs 0
+pstree_cont_native_ut_deseq_results_1<-results(
+pstree_cont_native_ut_deseq,contrast=c("storage_days_factor","3","0"))
+
+#Annotate with the taxonomy
+pstree_cont_native_ut_deseq_results_1_taxa<-taxo(pstree_cont_native_ut_deseq_results_1,pstree_cont_native_ut,0.01666667) #0.05/3 = 0.01666667 Bonferroni correction to account for 3 sets of pairwise testing in the dataset
+
+#ggplot form
+pstree_cont_native_ut_deseq_results_1_plot_data<-deseqplot_data(pstree_cont_native_ut_deseq_results_1_taxa)
+#Modify NA genus info
+pstree_cont_native_ut_deseq_results_1_plot_data <- replace_na(pstree_cont_native_ut_deseq_results_1_plot_data$Genus, "NA (LWQ8 family)")
+#Put in alphabetical order by genus
+pstree_cont_native_ut_deseq_results_1_plot_data <- pstree_cont_native_ut_deseq_results_1_plot_data[order(pstree_cont_native_ut_deseq_results_1_plot_data$Genus), ]
+
+pstree_cont_native_ut_deseq_results_1_plot_data[pstree_cont_native_ut_deseq_results_1_plot_data == 'Allorhizobium-Neorhizobium-Pararhizobium-Rhizobium'] <- 'ANPR'
+
+#Plot labels
+ut_lab1 <- expression(paste(italic("Achromobacter")))
+ut_lab2 <- expression(paste(italic("Acinetobacter")))
+ut_lab3 <- expression(paste(italic("ANPR")))
+ut_lab4 <- expression(paste(italic("Brucella")))
+ut_lab5 <- expression(paste(italic("Chalicogloea CCALA 975")))
+ut_lab6 <- expression(paste(italic("Flavobacterium")))
+ut_lab7 <- expression(paste(italic("Gemmobacter")))
+ut_lab8 <- expression(paste(italic("Hyphomicrobium")))
+ut_lab9 <- expression(paste(italic("Limnobacter")))
+ut_lab10 <- expression(paste(italic("Massilia")))
+ut_lab11 <- expression(paste("NA (", italic("LWQ8"), " family)"))
+ut_lab12 <- expression(paste(italic("Oceanobacillus")))
+ut_lab13 <- expression(paste(italic("Pseudomonas")))
+ut_lab14 <- expression(paste(italic("TM7a")))
+
+#Generate Plot
+ut1 <- ggplot(pstree_cont_native_ut_deseq_results_1_plot_data,aes(x=Genus, y=log2FoldChange)) +
+  geom_point (shape=21,size=10,aes(fill=Phylum)) +
+  scale_fill_manual(values = c('Cyanobacteria' ="green", 'Proteobacteria' = 'red', 'Bacteroidota' = 'purple', 'Firmicutes' = 'blue', 'Patescibacteria' = 'pink'))+
+  theme_classic() +
+  ggtitle("Untreated: day 3 vs day 0") +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5,size=40)) +
+  scale_x_discrete(labels = c(ut_lab1, ut_lab2, ut_lab3, ut_lab4, ut_lab5, ut_lab6, ut_lab7, ut_lab8, ut_lab9, ut_lab10, ut_lab11, ut_lab12, ut_lab13, ut_lab14)) +
+  geom_hline(yintercept = 0,linetype="dashed") +
+  labs(x="Genus", y = "Log2 fold change") +
+  scale_shape_manual(values=c(21,22,23,24,25)) +
+  theme(text = element_text(size = 40)) +
+  theme(legend.position="right",axis.text=element_text(size=40),axis.title=element_text(size=40),legend.text = element_text(size=40),legend.title = element_text(size=45), axis.text.x = element_text(face="italic"))
+
+cowplot::ggsave2("bonf_Untreated_3_vs_0_DeSeq2_Plot_with_NC_ASVs.png", width=20, height = 20, path = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Further_Data_Analysis/Results/DeSeq2_Plots/With_Neg_Control_Cont")
+
+############
+#Day 10 vs 0
+pstree_cont_native_ut_deseq_results_2<-results(
+pstree_cont_native_ut_deseq,contrast=c("storage_days_factor","10","0"))
+
+#Annotate with the taxonomy
+pstree_cont_native_ut_deseq_results_2_taxa<-taxo(pstree_cont_native_ut_deseq_results_2,pstree_cont_native_ut,0.01666667)
+
+#ggplot form
+pstree_cont_native_ut_deseq_results_2_plot_data<-deseqplot_data(pstree_cont_native_ut_deseq_results_2_taxa)
+#Modify NA genus info
+pstree_cont_native_ut_deseq_results_2_plot_data <- replace_na(pstree_cont_native_ut_deseq_results_2_plot_data$Genus, "NA (LWQ8 family)")
+#Put in alphabetical order by genus
+pstree_cont_native_ut_deseq_results_2_plot_data <- pstree_cont_native_ut_deseq_results_2_plot_data[order(pstree_cont_native_ut_deseq_results_2_plot_data$Genus), ]
+
+#Plot labels
+ut_lab15 <- expression(paste(italic("Brevundimonas")))
+ut_lab16 <- expression(paste(italic("Chalicogloea CCALA 975")))
+ut_lab17 <- expression(paste(italic("Gemmobacter")))
+ut_lab18 <- expression(paste(italic("Hyphomicrobium")))
+ut_lab19 <- expression(paste("NA (", italic("LWQ8"), " family)"))
+ut_lab20 <- expression(paste(italic("Pir4 lineage")))
+ut_lab21 <- expression(paste(italic("Pseudomonas")))
+ut_lab22 <- expression(paste(italic("Sporosarcina")))
+ut_lab23 <- expression(paste(italic("TM7a")))
+
+#Generate Plot
+ut2 <- ggplot(pstree_cont_native_ut_deseq_results_2_plot_data,aes(x=Genus.long, y=log2FoldChange)) +
+  geom_point (shape=21,size=10,aes(fill=Phylum)) +
+  scale_fill_manual(values = c('Cyanobacteria' ="green", 'Proteobacteria' = 'red', 'Firmicutes' = 'blue', 'Patescibacteria' = 'pink', 'Planctomycetota' = 'yellow'))+
+  theme_classic() +
+  ggtitle("Untreated: day 10 vs day 0") +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5,size=40)) +
+  scale_x_discrete(labels = c(ut_lab15, ut_lab16, ut_lab17, ut_lab18, ut_lab19, ut_lab20, ut_lab21, ut_lab22, ut_lab23)) +
+  geom_hline(yintercept = 0,linetype="dashed") +
+  labs(x="Genus", y = "Log2 fold change") +
+  scale_shape_manual(values=c(21,22,23,24,25)) +
+  theme(text = element_text(size = 40)) +
+  theme(legend.position="right",axis.text=element_text(size=40),axis.title=element_text(size=40),legend.text = element_text(size=40),legend.title = element_text(size=45), axis.text.x = element_text(face="italic"))
+
+cowplot::ggsave2("bonf_Untreated_10_vs_0_DeSeq2_Plot_with_NC_ASVs.png", width=20, height = 20, path = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Further_Data_Analysis/Results/DeSeq2_Plots/With_Neg_Control_Cont")
+
+############
+#Day 10 vs 3
+pstree_cont_native_ut_deseq_results_3<-results(
+pstree_cont_native_ut_deseq,contrast=c("storage_days_factor","10","3"))
+
+#Annotate with the taxonomy
+pstree_cont_native_ut_deseq_results_3_taxa<-taxo(pstree_cont_native_ut_deseq_results_3,pstree_cont_native_ut,0.01666667)
+
+#ggplot form
+pstree_cont_native_ut_deseq_results_3_plot_data<-deseqplot_data(pstree_cont_native_ut_deseq_results_3_taxa)
+#Put in alphabetical order by genus
+pstree_cont_native_ut_deseq_results_3_plot_data <- pstree_cont_native_ut_deseq_results_3_plot_data[order(pstree_cont_native_ut_deseq_results_3_plot_data$Genus), ]
+#Note there was no genus that was NA
+
+pstree_cont_native_ut_deseq_results_3_plot_data[pstree_cont_native_ut_deseq_results_3_plot_data == 'Allorhizobium-Neorhizobium-Pararhizobium-Rhizobium'] <- 'ANPR'
+
+#Generate Plot
+ut3 <- ggplot(pstree_cont_native_ut_deseq_results_3_plot_data,aes(x=Genus.long, y=log2FoldChange)) +
+  geom_point (shape=21,size=10,aes(fill=Phylum)) +
+  scale_fill_manual(values = c('Proteobacteria' = 'red', 'Firmicutes' = 'blue', 'Planctomycetota' = 'yellow', 'Bacteroidota' = 'purple'))+
+  theme_classic() +
+  ggtitle("Untreated: day 10 vs day 3") +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5,size=40)) +
+  geom_hline(yintercept = 0,linetype="dashed") +
+  labs(x="Genus", y = "Log2 fold change") +
+  scale_shape_manual(values=c(21,22,23,24,25)) +
+  theme(text = element_text(size = 40)) +
+  theme(legend.position="right",axis.text=element_text(size=40),axis.title=element_text(size=40),legend.text = element_text(size=40),legend.title = element_text(size=45), axis.text.x = element_text(face="italic"))
+
+#cowplot::ggsave2("bonf_Untreated_10_vs_3_DeSeq2_Plot_with_NC_ASVs.png", width=20, height = 20, path = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Further_Data_Analysis/Results/DeSeq2_Plots/With_Neg_Control_Cont")
+
+#Put all untreated charts into one plot
+prow <- cowplot::plot_grid(
+  ut1 + theme(legend.position="none", axis.text=element_text(size=40),axis.title=element_text(size=50),plot.title=element_text(size=65)),
+  ut2 + theme(legend.position="none", axis.text=element_text(size=40),axis.title=element_text(size=50),plot.title=element_text(size=65)),
+  ut3 + theme(legend.position="none", axis.text=element_text(size=40),axis.title=element_text(size=50),plot.title=element_text(size=65)),
+  align = 'vh',
+  hjust = -0.5,
+  # vjust = 1,
+  nrow = 2 ,
+  labels = "AUTO",
+  label_size = 70
+  )
+
+#Extract the legend from a plot and make it horizontal
+
+#Make a plot just to extract the legend from
+dummy <- rbind(pstree_cont_native_ut_deseq_results_3_plot_data,pstree_cont_native_ut_deseq_results_2_plot_data)
+
+dummy_plot <- ggplot(dummy,aes(x=Genus, y=log2FoldChange)) +
+  geom_point (shape=21,size=10,aes(fill=Phylum)) +
+  scale_fill_manual(values = c('Cyanobacteria' ="green", 'Proteobacteria' = 'red', 'Firmicutes' = 'blue', 'Patescibacteria' = 'pink', 'Planctomycetota' = 'yellow', 'Bacteroidota' = 'purple'))
+
+legend_b <- get_legend(
+  dummy_plot +
+    guides(color = guide_legend(nrow = 2)) +
+    theme(legend.position = "bottom", legend.title = element_text(size=65), legend.text = element_text(size=60))
+  )
+
+#Add the legend underneath the figure panel that was made above (prow). Give it 10% of the height of one plot (via rel_heights).
+cowplot::plot_grid(prow, legend_b, ncol = 1, rel_heights = c(1, .1))
+#cowplot::ggsave2("All_untreated.png", width=40, height = 40, path = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Further_Data_Analysis/Results/DeSeq2_Plots/With_Neg_Control_Cont")
+
+#############################################################################################
+#pstree_cont_native_t
+#############################
+pstree_cont_native_t_deseq <-phyloseq_to_deseq2(pstree_cont_native_t, ~ storage_days_factor)
+
+#Calculate size factors
+geoMeans = apply(counts(pstree_cont_native_t_deseq), 1, gm_mean)
+pstree_cont_native_t_deseq = estimateSizeFactors(pstree_cont_native_t_deseq, geoMeans = geoMeans)
+pstree_cont_native_t_deseq = DESeq(pstree_cont_native_t_deseq, fitType="local", test="Wald")
+
+#Extract results and specify contrasts
+#Can only specify one pair-wise contrast from results at one time
+############
+#Day 3 vs 0
+pstree_cont_native_t_deseq_results_1<-results(
+pstree_cont_native_t_deseq,contrast=c("storage_days_factor","3","0"))
+
+#Annotate with the taxonomy
+pstree_cont_native_t_deseq_results_1_taxa<-taxo(pstree_cont_native_t_deseq_results_1,pstree_cont_native_t,0.01666667)
+
+#ggplot form
+pstree_cont_native_t_deseq_results_1_plot_data<-deseqplot_data(pstree_cont_native_t_deseq_results_1_taxa)
+#Modify NA genus info
+pstree_cont_native_t_deseq_results_1_plot_data <- replace_na(pstree_cont_native_t_deseq_results_1_plot_data$Genus, "NA (LWQ8 family)")
+#Put in alphabetical order by genus
+pstree_cont_native_t_deseq_results_1_plot_data <- pstree_cont_native_t_deseq_results_1_plot_data[order(pstree_cont_native_t_deseq_results_1_plot_data$Genus), ]
+
+#Plot labels
+t_lab1 <- expression(paste("NA (", italic("LWQ8"), " family)"))
+t_lab2 <- expression(paste(italic("Pir4 lineage")))
+t_lab3 <- expression(paste(italic("Streptomyces")))
+t_lab4 <- expression(paste(italic("Vampirovibrio")))
+
+#Generate plot
+t1 <- ggplot(pstree_cont_native_t_deseq_results_1_plot_data,aes(x=Genus, y=log2FoldChange)) +
+  geom_point (shape=21,size=10,aes(fill=Phylum)) +
+  scale_fill_manual(values = c('Cyanobacteria' ="green",'Patescibacteria' = 'pink', 'Planctomycetota' = 'yellow', 'Actinobacteriota' = 'turquoise1'))+
+  theme_classic() +
+  ggtitle("Day 3 treated vs day 0 untreated") +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5,size=40)) +
+  scale_x_discrete(labels = c(t_lab1, t_lab2, t_lab3, t_lab4)) +
+  geom_hline(yintercept = 0,linetype="dashed") +
+  labs(x="Genus", y= "Log2 fold change") +
+  scale_shape_manual(values=c(21,22,23,24,25)) +
+  theme(text = element_text(size = 40)) +
+  theme(legend.position="right",axis.text=element_text(size=40),axis.title=element_text(size=40),legend.text = element_text(size=40),legend.title = element_text(size=45), axis.text.x = element_text(face="italic"))
+
+cowplot::ggsave2("bonf_Treated_3_vs_0_DeSeq2_Plot_with_NC_ASVs.png", width=20, height = 20, path = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Further_Data_Analysis/Results/DeSeq2_Plots/With_Neg_Control_Cont")
+
+############
+#Day 10 vs 0
+pstree_cont_native_t_deseq_results_2<-results(
+pstree_cont_native_t_deseq,contrast=c("storage_days_factor","10","0"))
+
+#Annotate with the taxonomy
+pstree_cont_native_t_deseq_results_2_taxa<-taxo(pstree_cont_native_t_deseq_results_2,pstree_cont_native_t,0.01666667)
+
+#ggplot form
+pstree_cont_native_t_deseq_results_2_plot_data<-deseqplot_data(pstree_cont_native_t_deseq_results_2_taxa)
+#Modify NA genus info
+pstree_cont_native_t_deseq_results_2_plot_data <- replace_na(pstree_cont_native_t_deseq_results_2_plot_data$Genus, "NA (LWQ8 family)")
+#Put in alphabetical order by genus
+pstree_cont_native_t_deseq_results_2_plot_data <- pstree_cont_native_t_deseq_results_2_plot_data[order(pstree_cont_native_t_deseq_results_2_plot_data$Genus), ]
+
+#Plot labels
+t_lab5 <- expression(paste(italic("Achromobacter")))
+t_lab6 <- expression(paste(italic("Cellulosimicrobium")))
+t_lab7 <- expression(paste(italic("Klebsiella")))
+t_lab8 <- expression(paste("NA (", italic("LWQ8"), " family)"))
+t_lab9 <- expression(paste(italic("Nocardiopsis")))
+t_lab10 <- expression(paste(italic("Pir4 lineage")))
+t_lab11 <- expression(paste(italic("Pseudonocardia")))
+t_lab12 <- expression(paste(italic("Streptomyces")))
+t_lab13 <- expression(paste(italic("TM7a")))
+t_lab14 <- expression(paste(italic("Vampirovibrio")))
+
+#Generate plot
+t2<- ggplot(pstree_cont_native_t_deseq_results_2_plot_data,aes(x=Genus.long, y=log2FoldChange)) +
+  geom_point (shape=21,size=10,aes(fill=Phylum)) +
+  scale_fill_manual(values = c('Cyanobacteria' ="green",'Patescibacteria' = 'pink', 'Planctomycetota' = 'yellow', 'Actinobacteriota' = 'turquoise1', 'Proteobacteria' = 'red'))+
+  theme_classic() +
+  ggtitle("Day 10 treated vs day 0 untreated") +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5,size=40)) +
+  scale_x_discrete(labels = c(t_lab5, t_lab6, t_lab7, t_lab8, t_lab9, t_lab10, t_lab11, t_lab12, t_lab13, t_lab14)) +
+  geom_hline(yintercept = 0,linetype="dashed") +
+  labs(x="Genus", y="Log2 fold change") +
+  scale_shape_manual(values=c(21,22,23,24,25)) +
+  theme(text = element_text(size = 40)) +
+  theme(legend.position="right",axis.text=element_text(size=40),axis.title=element_text(size=40),legend.text = element_text(size=40),legend.title = element_text(size=40), axis.text.x = element_text(face="italic"))
+
+cowplot::ggsave2("bonf_Treated_10_vs_0_DeSeq2_Plot_with_NC_ASVs.png", width=20, height = 20, path = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Further_Data_Analysis/Results/DeSeq2_Plots/With_Neg_Control_Cont")
+
+############
+#Day 10 vs 3
+pstree_cont_native_t_deseq_results_3<-results(
+pstree_cont_native_t_deseq,contrast=c("storage_days_factor","10","3"))
+
+#Annotate with the taxonomy
+pstree_cont_native_t_deseq_results_3_taxa<-taxo(pstree_cont_native_t_deseq_results_3,pstree_cont_native_t,0.01666667)
+
+#ggplot form
+pstree_cont_native_t_deseq_results_3_plot_data<-deseqplot_data(pstree_cont_native_t_deseq_results_3_taxa)
+#Put in alphabetical order by genus
+pstree_cont_native_t_deseq_results_3_plot_data <- pstree_cont_native_t_deseq_results_3_plot_data[order(pstree_cont_native_t_deseq_results_3_plot_data$Genus), ]
+#Note there was no NA genus
+
+#Generate Plot
+t3<- ggplot(pstree_cont_native_t_deseq_results_3_plot_data,aes(x=Genus.long, y=log2FoldChange)) +
+  geom_point (shape=21,size=10,aes(fill=Phylum)) +
+  scale_fill_manual(values = c('Patescibacteria' = 'pink', 'Actinobacteriota' = 'turquoise1', 'Proteobacteria' = 'red'))+
+  theme_classic() +
+  ggtitle("Day 10 treated vs day 3 treated") +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5,size=40)) +
+  geom_hline(yintercept = 0,linetype="dashed") +
+  labs(x="Genus", y="Log2 fold change") +
+  scale_shape_manual(values=c(21,22,23,24,25)) +
+  theme(text = element_text(size = 40)) +
+  theme(legend.position="right",axis.text=element_text(size=40),axis.title=element_text(size=40),legend.text = element_text(size=40),legend.title = element_text(size=40), axis.text.x = element_text(face="italic"))
+
+#cowplot::ggsave2("bonf_Treated_10_vs_3_DeSeq2_Plot_with_NC_ASVs.png", width=20, height = 20, path = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Further_Data_Analysis/Results/DeSeq2_Plots/With_Neg_Control_Cont")
+
+#Make figure with all treated plots
+prow2 <- cowplot::plot_grid(
+  t1 + theme(legend.position="none", axis.text=element_text(size=40),axis.title=element_text(size=50),plot.title=element_text(size=65)),
+  t2 + theme(legend.position="none", axis.text=element_text(size=40),axis.title=element_text(size=50),plot.title=element_text(size=65)),
+  t3 + theme(legend.position="none", axis.text=element_text(size=40),axis.title=element_text(size=50),plot.title=element_text(size=65)),
+  align = 'vh',
+  hjust = -0.5,
+  # vjust = 1,
+  nrow = 2 ,
+  labels = "AUTO",
+  label_size = 70
+  )
+
+#Extract the legend from a plot and make it horizontal
+legend_c <- get_legend(
+  t2 +
+    guides(color = guide_legend(nrow = 2)) +
+    theme(legend.position = "bottom", legend.title = element_text(size=65), legend.text = element_text(size=60))
+  )
+#Add the legend underneath the figure panel that was made above (prow). Give it 10% of the height of one plot (via rel_heights).
+cowplot::plot_grid(prow2, legend_c, ncol = 1, rel_heights = c(1, .1))
+#ggsave2("All_treated.png", width=40, height = 40, path = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Further_Data_Analysis/Results/DeSeq2_Plots/With_Neg_Control_Cont")
+
+```
+
+Summary charts were not generated to show changes in treated and untreated samples over time respectively
+
+```{r}
+#Charts to summarise DeSeq2 output
+##################
+#Treated plot
+##################
+#A new dataset was created and saved to show each of the general patterns (displayed by genera) in the dataset overtime
+cont_native_t_total_modified_chart <- read_csv("C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Further_Data_Analysis/Results/DESeq2_Tables/With_Neg_Control_Cont/cont_native_t_total_modified_chart.csv")
+cont_native_t_total_modified_chart$log2FoldChange <- factor(cont_native_t_total_modified_chart$log2FoldChange, levels = c('0', 'Decrease'))
+
+#Plot labels
+pattern_names <-c(
+  'Early_decrease'= 'Early decrease',
+  'Late_decrease' = 'Late decrease',
+  'Overtime_decrease' = 'Decrease\nover time'
+)
+
+t_combo_lab1 <- expression(paste(italic("Pir4 lineage, Streptomyces, Vampirovibrio,"), " NA (", italic("LWQ8"), " family)"))
+t_combo_lab3 <- expression(paste(italic("Pseudonocardia")))
+
+ggplot(cont_native_t_total_modified_chart, aes(x = point, y = log2FoldChange, group = line)) +
+  facet_grid(Genus~., labeller = labeller(Genus = pattern_names)) +
+  geom_point(shape=21,size=10,(aes(fill=Genus))) +
+  scale_y_discrete(limits = rev(levels(cont_native_t_total_modified_chart$log2FoldChange))) +
+  geom_line() +
+  xlab('Storage days') +
+  scale_x_continuous(breaks=seq(0,10,1)) +
+  ylab('Log2 fold change') +
+  scale_fill_manual(name = 'Genera in each group', values = c(Early_decrease = 'deeppink2', Late_decrease = 'purple2', Overtime_decrease ='darkorange2'), labels=c(t_combo_lab1, "Achromobacter, Cellulosimicrobium, Klebsiella,\nNocardiopsis, TM7a", t_combo_lab3)) +
+  theme(legend.position = 'bottom', legend.direction = 'vertical') +
+  #ggtitle("Patterns of Significant Changes in\nGenera Abundance") +
+  theme(strip.text.y.right = element_text(angle = 0)) +
+  theme(axis.text=element_text(size=65),axis.title=element_text(size=75),legend.text = element_text(size=70, face = "italic"),legend.title = element_text(size=75), plot.title=element_text(size=70), strip.text.y = element_text(size=65), legend.text.align = 0, legend.spacing.y = unit(1.25, 'cm')) +
+  guides(fill = guide_legend(byrow = TRUE))
+
+cowplot::ggsave2("Treated_Microbiome_DeSeq_Plot.png", width=30, height = 40, path = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Further_Data_Analysis/Results/DESeq2_Plots/With_Neg_Control_Cont")
+
+##################
+#Untreated plot
+##################
+#A new dataset was created and saved to show each of the general patterns (displayed by genera) in the dataset overtime
+cont_native_ut_total_modified_chart <- read_csv("C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Further_Data_Analysis/Results/DESeq2_Tables/With_Neg_Control_Cont/cont_native_ut_total_modified_chart.csv")
+cont_native_ut_total_modified_chart$log2FoldChange <- factor(cont_native_ut_total_modified_chart$log2FoldChange, levels = c('Increase','0', 'Decrease'))
+cont_native_ut_total_modified_chart$Genus <- factor(cont_native_ut_total_modified_chart$Genus, levels = c('green','yellow', 'purple','pink','blue'))
+levels(cont_native_ut_total_modified_chart$Genus)
+
+#Plot labels
+pattern_names_ut <-c(
+  'green'= 'Early decrease,\nlate increase',
+  'yellow' = 'Early decrease ',
+  'purple' = 'Early increase',
+  'pink' = 'Late decrease',
+  'blue' = 'Late increase'
+)
+
+ut_combo_lab2 <- expression(paste(italic("Hyphomicrobium, TM7a, "), "NA (", italic("LWQ8"), " family)"))
+ut_combo_lab3 <- expression(paste(italic("Chalicogloea CCALA 975, Gemmobacter")))
+ut_combo_lab4 <- expression(paste(italic("Pir4 lineage, Sporosarcina")))
+ut_combo_lab5 <- expression(paste(italic("Brevundimonas, Pseudomonas")))
+
+ggplot(cont_native_ut_total_modified_chart, aes(x = point, y = log2FoldChange, group = line)) +
+  facet_grid(Genus~., labeller = labeller(Genus = pattern_names_ut)) +
+  geom_point(shape=21,size=10,(aes(fill=Genus))) +
+  scale_y_discrete(limits = rev(levels(cont_native_ut_total_modified_chart$log2FoldChange))) +
+  geom_line() +
+  xlab('Storage days') +
+  scale_x_continuous(breaks=seq(0,10,1)) +
+  ylab('Log2 fold change') +
+  theme(legend.position = 'bottom', legend.direction = 'vertical') +
+  scale_fill_manual(name = 'Genera in each group', values = c(green = 'green2', yellow = 'deeppink2', purple = 'yellow2',pink = 'purple2', blue ='steelblue2'), labels = c('Achromobacter, Acinetobacter,\nAllorhizobium-Neorhizobium-Pararhizobium-Rhizobium,\nBrucella, Flavobacterium, Limnobacter, Massilia,\nOceanobacillus, Pseudomonas', ut_combo_lab2, ut_combo_lab3, ut_combo_lab4, ut_combo_lab5)) +
+  #ggtitle("Patterns of Significant Changes in\nGenera Abundance") +
+  theme(strip.text.y.right = element_text(angle = 0)) +
+  theme(text = element_text(size = 65)) +
+  theme(axis.text=element_text(size=65),axis.title=element_text(size=65),legend.text = element_text(size=65, face="italic"),legend.title = element_text(size=70), strip.text.y = element_text(size=62), title=element_text(size=70), legend.text.align = 0, legend.spacing.y = unit(1.25, 'cm')) +
+  guides(fill = guide_legend(byrow = TRUE))
+
+cowplot::ggsave2("Untreated_Microbiome_DeSeq_Plot.png", width=30, height = 40, path = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Further_Data_Analysis/Results/DESeq2_Plots/With_Neg_Control_Cont")
+
+```
+

@@ -1,0 +1,406 @@
+---
+title: "Beta_diversity_analysis"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include=FALSE}
+#INSTALL PACKAGES
+install.packages("tidyverse")
+install.packages("permute")
+install.packages("lattice")
+install.packages("data.table")
+install.packages("RColorBrewer")
+install.packages("vegan")
+install.packages("lme4")
+install.packages("cowplot")
+install.packages("ggsignif")
+install.packages("FSA")
+
+BiocManager::install("microbiome")
+BiocManager::install("phyloseq")
+BiocManager::install("DESeq2")
+
+devtools::install_github("pmartinezarbizu/pairwiseAdonis/pairwiseAdonis")
+
+#LOAD PACKAGES
+library(pairwiseAdonis)
+library(tidyverse)
+library(permute)
+library(lattice)
+library(data.table) 
+library(RColorBrewer)
+library(vegan)
+library(lme4)
+library(cowplot)
+library(microbiome)
+library(phyloseq)
+library(DESeq2)
+library(ggsignif)
+library(FSA)
+```
+
+```{r}
+
+#Load the phyloseq object 'pstree_cont' that was previously generated
+load("C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Phyloseq/R_Objects_for_Script/pstree_cont.RData")
+
+```
+
+#Section 10: Centred log ratio (CLR) transformations 
+CLR transformations were completed for beta diversity analysis.
+This is a transformation of the data which means that it doesn't need to be rarefied because this transformation allowed community composition certainty info to be maintained (Gloor et al, 2017).
+
+```{R}
+
+###########################
+#pstree_cont CLR transformation
+###########################
+pstree_cont_clr <- microbiome::transform(pstree_cont, "clr")
+
+#save(pstree_cont_clr, file = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Beta_Diversity/R_Objects_for_Script/pstree_cont_clr.RData")
+load("C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Beta_Diversity/R_Objects_for_Script/pstree_cont_clr.RData")
+
+```
+
+Individual phyloseq objects were then made from these CLR-transformed objects.
+This was because since beta diversity analyses differences in community structure among samples, sample groups were separated so that only the data to answer each question (regarding the effect of the treatment or the storage days variables) was provided.
+
+```{r}
+###############
+#First pull out each sample category from the pstree_cont_clr object
+#pstree_cont_clr.ut10 = prune_samples(sample_data(pstree_cont_clr)$treatment_storage_days_factor =='Untreated.10',pstree_cont_clr)
+#pstree_cont_clr.ut0 = prune_samples(sample_data(pstree_cont_clr)$treatment_storage_days_factor =='Untreated.0',pstree_cont_clr)
+#pstree_cont_clr.ut3 = prune_samples(sample_data(pstree_cont_clr)$treatment_storage_days_factor =='Untreated.3',pstree_cont_clr)
+#pstree_cont_clr.t3 = prune_samples(sample_data(pstree_cont_clr)$treatment_storage_days_factor =='Treated.3',pstree_cont_clr)
+#pstree_cont_clr.t10 = prune_samples(sample_data(pstree_cont_clr)$treatment_storage_days_factor =='Treated.10',pstree_cont_clr)
+
+#Now select combinations to combine into the relevant objects
+#pstree_cont_clr_native_ut = merge_phyloseq(pstree_cont_clr.ut0, pstree_cont_clr.ut3, pstree_cont_clr.ut10)
+#pstree_cont_clr_native_ut = prune_taxa(taxa_sums(pstree_cont_clr_native_ut)>0,pstree_cont_clr_native_ut)
+
+#pstree_cont_clr_native_t = merge_phyloseq(pstree_cont_clr.ut0, pstree_cont_clr.t3, pstree_cont_clr.t10)
+#pstree_cont_clr_native_t = prune_taxa(taxa_sums(pstree_cont_clr_native_t)>0,pstree_cont_clr_native_t)
+
+#pstree_cont_clr_day3 = merge_phyloseq(pstree_cont_clr.ut3, pstree_cont_clr.t3)
+#pstree_cont_clr_day3 = prune_taxa(taxa_sums(pstree_cont_clr_day3)>0,pstree_cont_clr_day3)
+
+#pstree_cont_clr_day10 = merge_phyloseq(pstree_cont_clr.ut10, pstree_cont_clr.t10)
+#pstree_cont_clr_day10 = prune_taxa(taxa_sums(pstree_cont_clr_day10)>0,pstree_cont_clr_day10)
+
+#########
+#save objects
+#save(pstree_cont_clr_native_ut, file = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Beta_Diversity/R_Objects_for_Script/pstree_cont_clr_native_ut.RData")
+#save(pstree_cont_clr_native_t, file = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Beta_Diversity/R_Objects_for_Script/pstree_cont_clr_native_t.RData")
+#save(pstree_cont_clr_day3, file = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Beta_Diversity/R_Objects_for_Script/pstree_cont_clr_day3.RData")
+#save(pstree_cont_clr_day10, file = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Beta_Diversity/R_Objects_for_Script/pstree_cont_clr_day10.RData")
+
+####Load objects
+load("C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Beta_Diversity/R_Objects_for_Script/pstree_cont_clr_native_ut.RData")
+load("C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Beta_Diversity/R_Objects_for_Script/pstree_cont_clr_native_t.RData")
+load("C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Beta_Diversity/R_Objects_for_Script/pstree_cont_clr_day3.RData")
+load("C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Beta_Diversity/R_Objects_for_Script/pstree_cont_clr_day10.RData")
+
+```
+
+#Section 11: Beta diversity: PCA plots
+Beta diversity assesses the community composition dis-similarity between samples i.e. it determines how different the structure of the community is between groups of samples.
+CLR transformed data was used for all beta diversity visualisations and analyses.
+
+Before analyses on each subsetted phyloseq object was completed, it was beneficial to determine how variables were driving diversity across the entire dataset i.e. could check if the date collected or the bio rep variables were driving diversity more than the treatment and storage days variables. The full dataset provided enough samples to better analyse the effect of these variables. Therefore, a PCA was first completed on the full 'pstree_cont_clr' phyloseq object.
+
+###PCA for the complete data object
+```{r}
+#A vegan_otu function was produced so that the abundance matrices could be easily extracted out of phyloseq objects into a form that could be used by vegan (and visualised).
+vegan_otu <- function(physeq) {
+  OTU <- otu_table(physeq)
+  if (taxa_are_rows(OTU)) {
+     OTU <- t(OTU)
+   }
+  return(as(OTU, "matrix"))
+}
+
+###########
+#pstree_cont_clr
+###########
+#Extract abundance info and metadata
+abundance_pstree_cont_clr<-vegan_otu(pstree_cont_clr)
+meta_pstree_cont_clr<-as(sample_data(pstree_cont_clr),"data.frame")
+
+#Perform the PCA
+pstree_cont_clr_pc<-prcomp(abundance_pstree_cont_clr)  #prcomp = principal component. PCA always uses euclidean distance.
+summary(pstree_cont_clr_pc)$importance[,1:2] #Extracting first 2 axis'. #PCA 1 = 13.3%, PCA 2 = 9.0%
+
+#Extract scores for plotting           
+pstree_cont_clr_pc_scores<-scores(pstree_cont_clr_pc)
+pstree_cont_clr_pc_scores_sub<-pstree_cont_clr_pc_scores[,1:2] #extracting scores from first 2 axes
+#Add metadata 
+pstree_cont_clr_pc_scores_sub<-cbind(pstree_cont_clr_pc_scores_sub,meta_pstree_cont_clr)
+
+###############################################
+#plots, axis labels = 13.3 and 9.0
+###############################################
+##############
+#presented by treatment and storage days factor
+##############
+
+p5 <- ggplot(pstree_cont_clr_pc_scores_sub,aes(x=PC1,y=PC2)) +
+stat_ellipse(type="t",aes(color=treatment_storage_days_factor),level = 0.95,alpha=0.5, linewidth=2.5) +
+  geom_point(aes(fill=treatment_storage_days_factor),size=15, shape=21) + 
+  scale_color_manual(values = c('Untreated.10' = "goldenrod3", 'Treated.10' = "mediumblue", 'Untreated.3'="firebrick", 'Treated.3'="mediumpurple3", 'Untreated.0' = 'springgreen2')) +
+  scale_fill_manual(values = c(Untreated.10 = "goldenrod3", 'Treated.10' = "mediumblue", 'Untreated.3'="firebrick", 'Treated.3'="mediumpurple3", 'Untreated.0' = 'springgreen2')) +
+  theme_bw() + 
+  labs(color="Treatment and storage days", fill = "Treatment and storage days", x="PC1 (13.3 %)",y="PC2 (9.0 %)") +
+  ggtitle("") +
+  theme(text = element_text(size = 60)) +
+  theme(axis.text=element_text(size=65),axis.title=element_text(size=70),legend.text = element_text(size=65),legend.title = element_text(size=70), title=element_text(size=65))
+
+#cowplot::ggsave2("Full_Microbiome_Comparison_Ordination.png", path = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Beta_Diversity/Results/Plots/CLR_Ordinations/With_Neg_Control_Cont/Full_Datasets", width = 25, height = 25)
+
+##############
+#coloured by treatment, points shaped by storage days
+##############
+ggplot(pstree_cont_clr_pc_scores_sub,aes(x=PC1,y=PC2)) +
+stat_ellipse(type="t",aes(color=treatment_factor),level = 0.95,alpha=0.5) +
+  geom_point(aes(colour=treatment_factor,shape=storage_days_factor),size=7) + 
+  scale_color_manual(values = c(Untreated = "grey69", Treated = "purple")) +
+  theme_bw() + 
+  labs(color="Treatment", shape ="Storage days", x="PC1 (13.3 %)",y="PC2 (9.0 %)") +
+  ggtitle("PCA Ordination") +
+  theme(text = element_text(size = 35)) +
+  theme(legend.position="right",axis.text=element_text(size=27),axis.title=element_text(size=25),legend.text = element_text(size=23),legend.title = element_text(size=25))
+
+#cowplot::ggsave2("Full_Microbiome_Comparison_Ordination(treatment_storage_days).png", path = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Beta_Diversity/Results/Plots/CLR_Ordinations/With_Neg_Control_Cont/Full_Datasets", width = 330, height = 330, units = "mm")
+
+##############
+#coloured by bio_rep
+##############
+ggplot(pstree_cont_clr_pc_scores_sub,aes(x=PC1,y=PC2)) +
+stat_ellipse(type="t",aes(color=bio_rep_factor),level = 0.95,alpha=0.5) +
+  geom_point(aes(colour=bio_rep_factor),size=7) + 
+  scale_color_manual(values = c("1" = "#73AE4F", "2"= "orange2", "3"="lawngreen", "4"="tan4","5"= "royalblue2","6"= "#E14676", "7"="lightpink1","8"="azure3", "9"="darkmagenta","10"= "#E5D252")) +
+  theme_bw() + 
+  labs(color="Biological Replicate",x="PC1 (13.3 %)",y="PC2 (9.0 %)") +
+  ggtitle("PCA Ordination") +
+  theme(text = element_text(size = 35)) +
+  theme(legend.position="right",axis.text=element_text(size=27),axis.title=element_text(size=25),legend.text = element_text(size=23),legend.title = element_text(size=25))
+
+#cowplot::ggsave2("Full_Microbiome_Comparison_Ordination(bio_rep).png", path = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Beta_Diversity/Results/Plots/CLR_Ordinations/With_Neg_Control_Cont/Full_Datasets", width = 330, height = 330, units = "mm")
+
+##############
+#coloured by date tomato collected
+##############
+ggplot(pstree_cont_clr_pc_scores_sub,aes(x=PC1,y=PC2)) +
+#stat_ellipse(type="t",aes(color=date_tomato_picked_factor),level = 0.95,alpha=0.5) +
+  geom_point(aes(colour=date_tomato_picked_factor),size=7) + 
+  scale_color_manual(values = c("19.6.20" = "red", "6.7.20" = "lightgoldenrod2","13.7.20" = "forestgreen","20.7.20" = "mediumorchid1","28.7.20" = "plum1", "3.8.20" = "cyan1","10.8.20" = "#E0DEDF", "16.9.20" = "sandybrown", "5.10.20" = "#5CB89C")) +
+  theme_bw() + 
+  labs(color="Date Collected",x="PC1 (13.3 %)",y="PC2 (9.0 %)") +
+    ggtitle("PCA Ordination") +
+  theme(text = element_text(size = 35)) +
+  theme(legend.position="right",axis.text=element_text(size=27),axis.title=element_text(size=25),legend.text = element_text(size=23),legend.title = element_text(size=25))
+
+#cowplot::ggsave2("Full_Microbiome_Comparison_Ordination(date_collected).png", path = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Beta_Diversity/Results/Plots/CLR_Ordinations/With_Neg_Control_Cont/Full_Datasets", width = 330, height = 330, units = "mm")
+```
+
+###PCAs for individual data objects
+PCA ordination plots were completed for the individual phyloseq objects and different variables of interest were overlaid.
+Here, either the treatment or storage days variables were overlaid (i.e. the variables of interest in each sub-setted dataset)
+```{r}
+
+###########
+#pstree_cont_clr_day10
+###########
+abundance_pstree_cont_clr_day10<-vegan_otu(pstree_cont_clr_day10)
+meta_pstree_cont_clr_day10<-as(sample_data(pstree_cont_clr_day10),"data.frame")
+        
+pstree_cont_clr_day10_pc<-prcomp(abundance_pstree_cont_clr_day10)
+summary(pstree_cont_clr_day10_pc)$importance[,1:2] #PCA 1 = 21.1%, PCA 2 = 15.5%
+        
+pstree_cont_clr_day10_pc_scores<-scores(pstree_cont_clr_day10_pc)
+pstree_cont_clr_day10_pc_scores_sub<-pstree_cont_clr_day10_pc_scores[,1:2]
+pstree_cont_clr_day10_pc_scores_sub<-cbind(pstree_cont_clr_day10_pc_scores_sub,meta_pstree_cont_clr_day10) 
+
+summary(pstree_cont_clr_day10_pc)$importance[,1:2]
+
+p4 <- ggplot(pstree_cont_clr_day10_pc_scores_sub,aes(x=PC1,y=PC2)) + stat_ellipse(type="t",aes(color=treatment_factor),level = 0.95,alpha=0.5,linewidth=2.5) +
+  geom_point(aes(fill=treatment_factor),size=10,shape=21) + 
+  scale_color_manual(values = c('Untreated' = "goldenrod3", 'Treated' = "mediumblue")) +
+  scale_fill_manual(values = c('Untreated' = "goldenrod3", 'Treated' = "mediumblue")) +
+  theme_bw() + 
+  labs(color="Treatment",fill='Treatment',x="PC1 (21.1 %)",y="PC2 (15.5 %)") +
+  ggtitle("Day 10 untreated and treated\nsamples") +
+  theme(text = element_text(size = 60)) +
+  theme(axis.text=element_text(size=65),axis.title=element_text(size=70),legend.text = element_text(size=65),legend.title = element_text(size=70), title=element_text(size=65))
+
+#cowplot::ggsave2("Day10.png", path = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Beta_Diversity/Results/Plots/CLR_Ordinations/With_Neg_Control_Cont/Subsetted_Data_Treatment_or_Storage_Days", width = 25, height = 25)
+
+###########
+#pstree_cont_clr_day3
+###########
+abundance_pstree_cont_clr_day3<-vegan_otu(pstree_cont_clr_day3)
+meta_pstree_cont_clr_day3<-as(sample_data(pstree_cont_clr_day3),"data.frame")
+        
+pstree_cont_clr_day3_pc<-prcomp(abundance_pstree_cont_clr_day3)
+summary(pstree_cont_clr_day3_pc)$importance[,1:2] #PCA 1 = 21.2%, PCA 2 = 13.8%
+        
+pstree_cont_clr_day3_pc_scores<-scores(pstree_cont_clr_day3_pc)
+pstree_cont_clr_day3_pc_scores_sub<-pstree_cont_clr_day3_pc_scores[,1:2]
+pstree_cont_clr_day3_pc_scores_sub<-cbind(pstree_cont_clr_day3_pc_scores_sub,meta_pstree_cont_clr_day3)
+
+summary(pstree_cont_clr_day3_pc)$importance[,1:2]
+
+p3 <- ggplot(pstree_cont_clr_day3_pc_scores_sub,aes(x=PC1,y=PC2)) + stat_ellipse(type="t",aes(color=treatment_factor),level = 0.95,alpha=0.5, linewidth=2.5) +
+  geom_point(aes(fill=treatment_factor),size=10, shape=21) + 
+  scale_color_manual(values = c('Untreated'="firebrick", 'Treated'="mediumpurple3")) +
+  scale_fill_manual(values = c('Untreated'="firebrick", 'Treated'="mediumpurple3")) +
+  theme_bw() + 
+  labs(color="Treatment",fill="Treatment",x="PC1 (21.2 %)",y="PC2 (13.8 %)") +
+  ggtitle("Day 3 untreated and treated\nsamples") +
+  theme(text = element_text(size = 60)) +
+  theme(axis.text=element_text(size=65),axis.title=element_text(size=70),legend.text = element_text(size=65),legend.title = element_text(size=70), title=element_text(size=65))
+
+#cowplot::ggsave2("Day3.png", path = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Beta_Diversity/Results/Plots/CLR_Ordinations/With_Neg_Control_Cont/Subsetted_Data_Treatment_or_Storage_Days", width = 25, height = 25)
+
+###########
+#pstree_cont_clr_native_ut
+###########
+abundance_pstree_cont_clr_native_ut<-vegan_otu(pstree_cont_clr_native_ut)
+meta_pstree_cont_clr_native_ut<-as(sample_data(pstree_cont_clr_native_ut),"data.frame")
+        
+pstree_cont_clr_native_ut_pc<-prcomp(abundance_pstree_cont_clr_native_ut)
+summary(pstree_cont_clr_native_ut_pc)$importance[,1:2] #PCA 1 = 18.0%, PCA 2 = 10.9%
+        
+pstree_cont_clr_native_ut_pc_scores<-scores(pstree_cont_clr_native_ut_pc)
+pstree_cont_clr_native_ut_pc_scores_sub<-pstree_cont_clr_native_ut_pc_scores[,1:2]
+pstree_cont_clr_native_ut_pc_scores_sub<-cbind(pstree_cont_clr_native_ut_pc_scores_sub,meta_pstree_cont_clr_native_ut)
+
+summary(pstree_cont_clr_native_ut_pc)$importance[,1:2]
+
+p1 <- ggplot(pstree_cont_clr_native_ut_pc_scores_sub,aes(x=PC1,y=PC2)) + stat_ellipse(type="t",aes(color=storage_days_factor),level = 0.95,alpha=0.5,linewidth=2.5) +
+  geom_point(aes(fill=storage_days_factor),size=10, shape=21) +
+  scale_color_manual(values = (c('0'="springgreen2",'3'="firebrick", '10' = "goldenrod3"))) +
+    scale_fill_manual(values = (c('0'="springgreen2",'3'="firebrick", '10' = "goldenrod3"))) +
+  theme_bw() + 
+  labs(color="Storage days", fill='Storage days', x="PC1 (18.0 %)",y="PC2 (10.9 %)") +
+  ggtitle("Untreated samples at different\ntimepoints post-harvest") +
+  theme(text = element_text(size = 60)) +
+  theme(axis.text=element_text(size=65),axis.title=element_text(size=70),legend.text = element_text(size=65),legend.title = element_text(size=70), title=element_text(size=65))
+
+#cowplot::ggsave2("Untreated_Native_Microbiome.png", path = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Beta_Diversity/Results/Plots/CLR_Ordinations/With_Neg_Control_Cont/Subsetted_Data_Treatment_or_Storage_Days",  width = 25, height = 25)
+
+###########
+#pstree_cont_clr_native_t
+###########
+abundance_pstree_cont_clr_native_t<-vegan_otu(pstree_cont_clr_native_t)
+meta_pstree_cont_clr_native_t<-as(sample_data(pstree_cont_clr_native_t),"data.frame")
+        
+pstree_cont_clr_native_t_pc<-prcomp(abundance_pstree_cont_clr_native_t)
+summary(pstree_cont_clr_native_t_pc)$importance[,1:2] #PCA 1 = 20.4%, PCA 2 = 10.9%
+        
+pstree_cont_clr_native_t_pc_scores<-scores(pstree_cont_clr_native_t_pc)
+pstree_cont_clr_native_t_pc_scores_sub<-pstree_cont_clr_native_t_pc_scores[,1:2]
+pstree_cont_clr_native_t_pc_scores_sub<-cbind(pstree_cont_clr_native_t_pc_scores_sub,meta_pstree_cont_clr_native_t)
+
+summary(pstree_cont_clr_native_t_pc)$importance[,1:2]
+
+p2 <- ggplot(pstree_cont_clr_native_t_pc_scores_sub,aes(x=PC1,y=PC2)) + stat_ellipse(type="t",aes(color=treatment_storage_days_factor),level = 0.95,alpha=0.5, linewidth=2.5) +
+  geom_point(aes(fill=treatment_storage_days_factor),size=10, shape=21) +
+  scale_color_manual(values = c(Untreated.0="springgreen2",Treated.3="mediumpurple3", Treated.10 = "mediumblue")) +
+  scale_fill_manual(values = c(Untreated.0="springgreen2",Treated.3="mediumpurple3", Treated.10 = "mediumblue")) +
+  theme_bw() + 
+  labs(fill="Treatment and storage days", color = "Treatment and storage days", x="PC1 (20.4 %)",y="PC2 (10.9 %)") +
+  ggtitle("Treated samples at different\ntimepoints post-harvest") +
+  theme(text = element_text(size = 60)) +
+  theme(axis.text=element_text(size=65),axis.title=element_text(size=70),legend.text = element_text(size=65),legend.title = element_text(size=70), title=element_text(size=65))
+
+#cowplot::ggsave2("Treated_Native_Microbiome.png", path = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Beta_Diversity/Results/Plots/CLR_Ordinations/With_Neg_Control_Cont/Subsetted_Data_Treatment_or_Storage_Days", width = 25, height = 25)
+
+########
+#Put all of the PCAs from the sub-setted phyloseq object into one chart
+
+prow <- cowplot::plot_grid(
+  p1 + theme(legend.position="none", axis.text=element_text(size=36),axis.title=element_text(size=38),plot.title=element_text(size=45)),
+  p2 + theme(legend.position="none", axis.text=element_text(size=36),axis.title=element_text(size=38),plot.title=element_text(size=45)),
+  p3 + theme(legend.position="none", axis.text=element_text(size=36),axis.title=element_text(size=38),plot.title=element_text(size=45)),
+  p4 + theme(legend.position="none", axis.text=element_text(size=36),axis.title=element_text(size=38),plot.title=element_text(size=45)),
+  align = 'vh',
+  hjust = -0.5,
+ # vjust = 1,
+  nrow = 2 ,
+  labels = "AUTO", 
+  label_size = 50
+)
+
+cowplot::plot_grid(prow)
+
+#Extract the legend from a plot and make it horizontal
+legend_b <- get_legend(
+  p5 + 
+    guides(color = guide_legend(nrow = 2)) +
+    theme(legend.position = "bottom", legend.title = element_text(size=42), legend.text = element_text(size=40))
+)
+
+#Add the legend underneath the figure panel that was made above (prow). Give it 10% of the height of one plot (via rel_heights).
+cowplot::plot_grid(prow, legend_b, ncol = 1, rel_heights = c(1, .1))
+#cowplot::ggsave2("All.png", path = "C:/Users/Ashleigh/OneDrive - Nexus365/Microbiome/Microbiome_data_analysis/Scripts_and_Results/Beta_Diversity/Results/Plots/CLR_Ordinations/With_Neg_Control_Cont/Subsetted_Data_Treatment_or_Storage_Days", width = 25, height = 25)
+
+```
+#Section 12: Beta diversity: PERMANOVAs
+PERMANOVA is a randomisation procedure that tests for the effects of predictors of interest (i.e. variables) in driving differences in beta diversity/community structure.
+PERMANOVAs only test a distance/dis-similarity metric and not the method of ordination.
+R-squared values for effects are generated as well as p-values - R squared values provides the % of variation explained and p-value shows whether this result was likely a result of chance.
+PERMANOVA testing is completed in vegan, therefore the data needed to be extracted outside of phyloseq.
+
+PERMANOVAs were first completed for the complete phyloseq objects, where all variables could be added into the model because there was enough data for the bio reps and date collected in these datasets.
+
+```{r}
+
+pstree_cont_clr_perm <- adonis2(abundance_pstree_cont_clr ~ treatment_factor *storage_days_factor + bio_rep_factor + date_tomato_picked_factor, data=meta_pstree_cont_clr, permutations=999,method="euclidean")
+pstree_cont_clr_perm
+
+#specified euclidean distance between samples (which is the same as Aitchison distance)
+#could do + other factor after the first stated variable.
+#999 permutations (the default) = the number of randomisations it does to generate a test statistic and a p-value - note that it is the differences in Aitchison distance between samples that is being randomised.
+
+```
+
+PERMANOVAs were then completed for individual phyloseq objects with only the treatment or storage days variable (there was not enough data available in sub-setted objects for the effect of bio reps or date collected on variation to be properly estimated)
+
+```{r}
+
+###########
+#pstree_cont_clr_day10
+###########
+rel_pstree_cont_clr_day10_perm <- adonis2(abundance_pstree_cont_clr_day10 ~ treatment_factor, data=meta_pstree_cont_clr_day10, permutations=999,method="euclidean") 
+rel_pstree_cont_clr_day10_perm
+
+###########
+#pstree_cont_clr_day3
+###########
+rel_pstree_cont_clr_day3_perm <- adonis2(abundance_pstree_cont_clr_day3 ~ treatment_factor, data=meta_pstree_cont_clr_day3, permutations=999,method="euclidean") 
+rel_pstree_cont_clr_day3_perm
+
+###########
+#pstree_cont_clr_native_ut
+###########
+pstree_clr_native_ut_rel <- adonis2(abundance_pstree_clr_native_ut ~ storage_days_factor, data=meta_pstree_clr_native_ut, permutations=999,method="euclidean")
+pstree_clr_native_ut_rel #No factors are sig so pairwise comparisons were not completed as a post-hoc analysis
+
+###########
+#pstree_cont_clr_native_t
+###########
+pstree_clr_native_t_rel <- adonis2(abundance_pstree_clr_native_t ~ storage_days_factor, data=meta_pstree_clr_native_t, permutations=999,method="euclidean")
+pstree_clr_native_t_rel #Storage days was sig so pairwise comparisons were completed as a post-hoc analysis
+
+#Pairwise post-hoc analysis
+pair_pstree_cont_clr_native_t_perm <- pairwise.adonis2(abundance_pstree_cont_clr_native_t ~ storage_days_factor, data = meta_pstree_cont_clr_native_t, method='euclidean', p.adjust='bonferroni')
+pair_pstree_cont_clr_native_t_perm
+
+        
+```
+
+
